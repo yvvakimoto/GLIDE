@@ -53,6 +53,10 @@ npm run dev        # http://localhost:5273
   translates it through the selected layout, so you can practise Dvorak with the
   OS still on QWERTY. *os layout* trusts `event.key` for people who already
   switched the system layout.
+- **Speed in characters, not keystrokes** — WPM counts the text you produced,
+  five characters to the word, so one kana is worth the same whether it took one
+  key or three. Romaji and thumb-shift are therefore directly comparable; the
+  keystrokes it took are reported separately. Accuracy stays a keystroke figure.
 - **Speed graph** — instantaneous WPM as an area, a configurable moving average
   (2/5/10/20 s) as the bright line, error ticks along the floor. Live during the
   run and again, larger, in the summary.
@@ -138,7 +142,10 @@ the small kana and the punctuation, and pins a sample of positions against the
 published charts — including that 飛鳥 is 清濁別置 (が has its own key) while
 NICOLA is 清濁同置 (が is か plus a thumb).
 
-Japanese runs report `kana/min` alongside WPM, and romaji runs also report
+Speed is measured in kana, not in keystrokes, so the three methods can be
+compared: a kana counts once whether romaji spent three keys on it or a thumb
+shift spent one, and the headline WPM is kana ÷ 5 per minute. Japanese runs
+report `kana/min` and `keys/min` side by side, and romaji runs also report
 `keys per kana`, which is the number worth pushing down.
 
 ## Text sources
@@ -231,6 +238,7 @@ Two things the workflow file cannot do for you:
 
 ```bash
 npm test           # layout coverage, spline resampling, WPM/stats math
+                   # - including that romaji and NICOLA score the same kana alike
 npm run build      # tsc --noEmit, then a production bundle
 npm run preview    # serve the bundle
 ```

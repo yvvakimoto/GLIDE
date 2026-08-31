@@ -259,7 +259,13 @@ export class Runner {
     return this.segments[this.segments.length - 1]?.attribution;
   }
 
-  /** Units completed — kana for Japanese, characters for English. */
+  /**
+   * Units completed — kana for Japanese, characters for English.
+   *
+   * Not a speed numerator: romaji folds きゃ into one unit while a kana layout
+   * types it as two keys, so unit counts do not compare across methods.
+   * Characters do, and that is what `Stats.producedChars` counts.
+   */
   get unitsDone(): number {
     return this.unitIndex;
   }
@@ -404,12 +410,14 @@ export class Runner {
     const expected = unit.sequences[this.viable[0] ?? 0]?.[at];
 
     if (stillViable.length > 0) {
-      this.record(chord, expected, true, press.at);
+      // Speed is measured in characters, so the press that *finishes* the unit is
+      // the one that credits them: romaji きゃ scores 2 on the a and 0 before it.
+      const finished = stillViable.find((i) => unit.sequences[i]!.length === at + 1);
+      this.record(chord, expected, true, press.at, finished === undefined ? 0 : unit.text.length);
       this.blocked = false;
       this.mistyped = undefined;
       this.typed.push(chord);
       this.viable = stillViable;
-      const finished = stillViable.find((i) => unit.sequences[i]!.length === this.typed.length);
       if (finished !== undefined) this.completeUnit(unit, unit.sequences[finished]!.length);
       return;
     }
@@ -417,7 +425,10 @@ export class Runner {
     // a habitual extra keystroke the previous unit tolerates (the second n of ん)
     if (absorb && chordEquals(absorb, chord)) return;
 
-    this.record(chord, expected, false, press.at);
+    // A miss wastes the unit in proportion to the presses it needs, so raw speed
+    // charges a fumbled romaji kana a third of itself, not a whole one.
+    const needed = unit.sequences[this.viable[0] ?? 0]?.length ?? 1;
+    this.record(chord, expected, false, press.at, unit.text.length / needed);
     if (this.settings.errorMode === 'block') {
       // The cursor simply does not move. Nothing is inserted, so there is nothing
       // to delete: the next correct press carries on from here, and the character
@@ -432,7 +443,14 @@ export class Runner {
     }
   }
 
-  private record(chord: Chord, expected: Chord | undefined, correct: boolean, at: number): void {
+  /** `chars` is what the press is worth to the speed figures; see `Keystroke`. */
+  private record(
+    chord: Chord,
+    expected: Chord | undefined,
+    correct: boolean,
+    at: number,
+    chars: number,
+  ): void {
     const stroke: Keystroke = {
       // the moment the key went down, so a deferred resolution cannot skew speed
       t: Math.max(0, at - this.runStartedAt),
@@ -442,6 +460,7 @@ export class Runner {
       code: chord.code,
       finger: physKey(chord.code)?.finger ?? 'thumb',
       shift: chord.shift || chord.thumb !== 'none',
+      chars,
     };
     this.stats.push(stroke);
     this.lastCode = chord.code;

@@ -107,6 +107,17 @@ nothing about rendering.
   no thumb held is therefore deferred until release or the next key. Presses are
   timestamped at keydown so deferral never skews the measured speed. Details in
   `src/core/input.ts`.
+- **Speed counts characters produced; accuracy counts presses.** `Keystroke.chars`
+  is the numerator of every speed figure: on a correct press it is the characters
+  the press *finished* — a unit's whole span on its last press, and 0 half-way
+  through romaji きゃ — and on a miss the share of the unit it wasted. That is
+  the only reason the three Japanese methods can be compared at all; counting
+  presses scored romaji about twice as fast for the same passage. Latin is the
+  degenerate case, one press one character, so latin numbers are unchanged, and
+  nothing in `stats.ts` branches on the script. Do not reach for
+  `Runner.unitsDone` instead: romaji folds きゃ into one unit while a kana layout
+  types it as two keys, so unit counts are not comparable across methods either —
+  which is exactly what the old `kana/min` card got wrong.
 - **The text panel answers "which finger", and it does it per *press*.**
   `Runner.cuePlan` is what `ui/text-view.ts` draws the finger marks and the tint
   from. It walks the same preferred sequences as `expectedChords`, so the two
