@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CharState, Runner } from '../src/core/engine';
 import { DEFAULT_SETTINGS, type Settings } from '../src/core/settings';
@@ -57,7 +57,7 @@ describe('Runner', () => {
     expect(typeExpected()).toBe(true);
     expect(runner.cursor).toBe(1);
     expect(runner.states[0]).toBe(CharState.Correct);
-    expect(runner.stats.correctChars).toBe(1);
+    expect(runner.stats.correctKeys).toBe(1);
     expect(runner.mistyped).toBeUndefined();
     expect(expected).toBe(runner.text[0]);
   });
@@ -71,7 +71,7 @@ describe('Runner', () => {
       expect(runner.cursor).toBe(0);
       expect(runner.blocked).toBe(true);
       expect(runner.states[0]).toBe(CharState.Error);
-      expect(runner.stats.errorChars).toBe(1);
+      expect(runner.stats.errorKeys).toBe(1);
       // the text is untouched: there is nothing to delete
       expect(runner.text[0]).not.toBe('q');
     });
@@ -83,8 +83,8 @@ describe('Runner', () => {
       expect(runner.cursor).toBe(1);
       expect(runner.blocked).toBe(false);
       expect(runner.states[0]).toBe(CharState.Fixed);
-      expect(runner.stats.correctChars).toBe(1);
-      expect(runner.stats.errorChars).toBe(1);
+      expect(runner.stats.correctKeys).toBe(1);
+      expect(runner.stats.errorKeys).toBe(1);
     });
 
     it('counts every attempt, since none of them are swallowed', () => {
@@ -93,8 +93,8 @@ describe('Runner', () => {
       type(wrongKey());
       expect(runner.cursor).toBe(0);
       expect(runner.blocked).toBe(true);
-      expect(runner.stats.errorChars).toBe(3);
-      expect(runner.stats.correctChars).toBe(0);
+      expect(runner.stats.errorKeys).toBe(3);
+      expect(runner.stats.correctKeys).toBe(0);
       expect(runner.stats.accuracy()).toBe(0);
     });
 
@@ -216,7 +216,7 @@ describe('Runner', () => {
     runner.abort(t + 500);
     expect(runner.phase).toBe('finished');
     expect(runner.endReason).toBe('quit');
-    expect(runner.summary((code) => code).correctChars).toBe(1);
+    expect(runner.summary((code) => code).correctKeys).toBe(1);
   });
 });
 
@@ -252,11 +252,17 @@ describe('Runner, Japanese', () => {
     return done;
   };
 
+  /** Types this method's presses until the cursor reaches `chars` of the text. */
+  const typeUpTo = (runner: Runner, chars: number): void => {
+    let t = 2000;
+    while (runner.cursor < chars && typeNext(runner, 1, (t += 100)) === 1);
+  };
+
   it('takes several presses per kana in romaji, and one in a kana layout', () => {
     const romaji = start({ jaMethod: 'romaji' });
     typeNext(romaji, 40);
-    expect(romaji.stats.correctChars).toBe(40);
-    expect(romaji.stats.errorChars).toBe(0);
+    expect(romaji.stats.correctKeys).toBe(40);
+    expect(romaji.stats.errorKeys).toBe(0);
     // roughly two latin keys per kana
     expect(romaji.unitsDone).toBeGreaterThan(15);
     expect(romaji.unitsDone).toBeLessThan(40);
@@ -264,9 +270,53 @@ describe('Runner, Japanese', () => {
     for (const jaMethod of ['nicola', 'asuka'] as const) {
       const kana = start({ jaMethod });
       typeNext(kana, 30);
-      expect(kana.stats.errorChars, jaMethod).toBe(0);
+      expect(kana.stats.errorKeys, jaMethod).toBe(0);
       expect(kana.unitsDone, jaMethod).toBe(30);
     }
+  });
+
+  it('measures the same speed for the same kana, whichever method typed them', () => {
+    // The point of counting characters rather than presses: romaji spends about
+    // twice the keystrokes on a passage, and must not score twice the speed.
+    const run = (jaMethod: Settings['jaMethod']) => {
+      // fix the passage bag so both methods are handed the same text
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const runner = start({ jaMethod });
+      typeUpTo(runner, 120);
+      vi.restoreAllMocks();
+      return runner;
+    };
+
+    const romaji = run('romaji');
+    const nicola = run('nicola');
+
+    expect(romaji.text.slice(0, 120)).toBe(nicola.text.slice(0, 120));
+    expect(romaji.stats.producedChars).toBeGreaterThanOrEqual(120);
+    expect(nicola.stats.producedChars).toBe(romaji.stats.producedChars);
+    expect(nicola.stats.netWpm(60_000)).toBeCloseTo(romaji.stats.netWpm(60_000), 6);
+
+    // ...while the keystroke counts still show the difference in effort
+    const keys = (r: Runner) => r.stats.correctKeys + r.stats.errorKeys;
+    expect(keys(romaji)).toBeGreaterThan(keys(nicola) * 1.5);
+  });
+
+  it('counts a romaji cluster once, on the press that finishes it', () => {
+    const runner = start({ jaMethod: 'romaji' });
+    // walk to a unit that spans two characters (きゃ and friends)
+    for (let i = 0; i < 400; i++) {
+      if (runner.cuePlan(1)[0]?.span === 2) break;
+      typeNext(runner, 1, 2000 + i * 100);
+    }
+    const cue = runner.cuePlan(1)[0]!;
+    expect(cue.span).toBe(2);
+    const before = runner.stats.producedChars;
+    const presses = runner.cuePlan(8).filter((c) => c.index === cue.index).length;
+    expect(presses).toBeGreaterThan(1);
+    for (let i = 0; i < presses; i++) {
+      expect(runner.stats.producedChars, `press ${i}`).toBe(before);
+      typeNext(runner, 1, 40_000 + i * 100);
+    }
+    expect(runner.stats.producedChars).toBe(before + 2);
   });
 
   it('needs the thumb key held for a thumb-shifted kana', () => {
@@ -400,7 +450,7 @@ describe('Runner, Japanese', () => {
         }
         // romaji resolves on keydown; the release is irrelevant but harmless
         expect(runner.blocked).toBe(false);
-        expect(runner.stats.errorChars).toBe(0);
+        expect(runner.stats.errorKeys).toBe(0);
         expect(runner.unitsDone).toBe(units + 1);
         return;
       }
@@ -422,12 +472,12 @@ describe('Runner, Japanese', () => {
 
       // ん finished by a single n is the case where a habitual second n is free
       if (isN && firstPressOfUnit && runner.unitsDone === units + 1) {
-        const errors = runner.stats.errorChars;
-        const strokes = runner.stats.correctChars;
+        const errors = runner.stats.errorKeys;
+        const strokes = runner.stats.correctKeys;
         runner.handleKeydown(keyFor(settings({ layout: 'qwerty' }), 'n'), 9000 + i * 90);
         expect(runner.blocked).toBe(false);
-        expect(runner.stats.errorChars).toBe(errors);
-        expect(runner.stats.correctChars).toBe(strokes);
+        expect(runner.stats.errorKeys).toBe(errors);
+        expect(runner.stats.correctKeys).toBe(strokes);
         return;
       }
     }

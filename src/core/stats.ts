@@ -1,6 +1,14 @@
 /**
  * Everything derived from the keystroke log: the live speed series with its
  * moving average, plus the aggregates the summary screen shows.
+ *
+ * Two different things are counted here, and keeping them apart is the whole
+ * point of this module: **speed counts the characters of text produced, while
+ * accuracy counts presses.** A press carries its own character worth (see
+ * `Keystroke.chars`), so a romaji kana and a thumb-shift kana are the same
+ * amount of speed for a different number of keystrokes, and the two Japanese
+ * methods can be compared at all. Latin is the degenerate case where one press
+ * is one character, so nothing about latin numbers changes.
  */
 
 import type { Finger } from './keyboard-geometry';
@@ -14,6 +22,17 @@ export type Keystroke = {
   code: string;
   finger: Finger;
   shift: boolean;
+  /**
+   * What this press is worth in characters of text — the numerator of every
+   * speed figure.
+   *
+   * On a correct press it is the characters the press *finished*: a unit's whole
+   * span on its last press, and 0 half-way through one, so romaji credits きゃ
+   * once, on the a, rather than three times. On a wrong press it is the share of
+   * the unit the miss wasted, so mashing costs raw speed in proportion to the
+   * keystrokes the unit actually needs. Latin is always 1.
+   */
+  chars: number;
 };
 
 export type SamplePoint = {
@@ -39,8 +58,10 @@ export type Summary = {
   accuracy: number;
   consistency: number;
   durationMs: number;
-  correctChars: number;
-  errorChars: number;
+  /** characters of text produced: kana for Japanese, characters for English */
+  producedChars: number;
+  correctKeys: number;
+  errorKeys: number;
   keystrokes: number;
   corrections: number;
   bestStreak: number;
@@ -57,6 +78,7 @@ const MIN_WINDOW_MS = 400;
 /** gaps longer than this are pauses, not typing, so latency stats skip them */
 const PAUSE_MS = 1000;
 
+/** Five characters is one word, for kana as much as for letters. */
 export const wpmOf = (chars: number, ms: number): number => (ms <= 0 ? 0 : chars / 5 / (ms / 60_000));
 
 export class Stats {
@@ -65,6 +87,8 @@ export class Stats {
   private nextSampleAt = SAMPLE_MS;
   private correct = 0;
   private errors = 0;
+  private produced = 0;
+  private rawChars = 0;
   private corrections = 0;
   private streak = 0;
   private best = 0;
@@ -76,8 +100,10 @@ export class Stats {
 
   push(stroke: Keystroke): void {
     this.strokes.push(stroke);
+    this.rawChars += stroke.chars;
     if (stroke.correct) {
       this.correct++;
+      this.produced += stroke.chars;
       this.streak++;
       if (this.streak > this.best) this.best = this.streak;
     } else {
@@ -92,11 +118,16 @@ export class Stats {
     this.streak = 0;
   }
 
-  get correctChars(): number {
+  /** Characters of text produced — kana for Japanese, characters for English. */
+  get producedChars(): number {
+    return this.produced;
+  }
+
+  get correctKeys(): number {
     return this.correct;
   }
 
-  get errorChars(): number {
+  get errorKeys(): number {
     return this.errors;
   }
 
@@ -114,11 +145,11 @@ export class Stats {
   }
 
   netWpm(elapsedMs: number): number {
-    return wpmOf(this.correct, elapsedMs);
+    return wpmOf(this.produced, elapsedMs);
   }
 
   rawWpm(elapsedMs: number): number {
-    return wpmOf(this.correct + this.errors, elapsedMs);
+    return wpmOf(this.rawChars, elapsedMs);
   }
 
   setMaWindow(seconds: number): void {
@@ -141,8 +172,8 @@ export class Stats {
         if (s.t <= from && s.t <= since) break;
         if (s.t > at) continue;
         if (s.t > from) {
-          total++;
-          if (s.correct) correct++;
+          total += s.chars;
+          if (s.correct) correct += s.chars;
         }
         if (s.t > since && !s.correct) errorsHere++;
       }
@@ -206,7 +237,7 @@ export class Stats {
     const perSecond = new Map<number, number>();
     for (const s of this.strokes) {
       const sec = Math.floor(s.t / 1000);
-      perSecond.set(sec, (perSecond.get(sec) ?? 0) + 1);
+      perSecond.set(sec, (perSecond.get(sec) ?? 0) + s.chars);
     }
     const speeds = [...perSecond.values()].map((n) => wpmOf(n, 1000));
     const mean = speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
@@ -223,8 +254,9 @@ export class Stats {
       accuracy: this.accuracy(),
       consistency,
       durationMs: elapsedMs,
-      correctChars: this.correct,
-      errorChars: this.errors,
+      producedChars: this.produced,
+      correctKeys: this.correct,
+      errorKeys: this.errors,
       keystrokes: this.correct + this.errors,
       corrections: this.corrections,
       bestStreak: this.best,

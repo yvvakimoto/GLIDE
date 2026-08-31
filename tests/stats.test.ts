@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { Stats, wpmOf, type Keystroke } from '../src/core/stats';
 
-const stroke = (t: number, expected: string, typed = expected, code = 'KeyA'): Keystroke => ({
+const stroke = (
+  t: number,
+  expected: string,
+  typed = expected,
+  code = 'KeyA',
+  chars = 1,
+): Keystroke => ({
   t,
   expected,
   typed,
@@ -10,6 +16,7 @@ const stroke = (t: number, expected: string, typed = expected, code = 'KeyA'): K
   code,
   finger: 'l5',
   shift: false,
+  chars,
 });
 
 describe('wpm', () => {
@@ -30,8 +37,9 @@ describe('Stats', () => {
     stats.push(stroke(300, 'c', 'x'));
     stats.push(stroke(400, 'd'));
 
-    expect(stats.correctChars).toBe(3);
-    expect(stats.errorChars).toBe(1);
+    expect(stats.correctKeys).toBe(3);
+    expect(stats.errorKeys).toBe(1);
+    expect(stats.producedChars).toBe(3);
     expect(stats.accuracy()).toBeCloseTo(75, 6);
     expect(stats.bestStreak).toBe(2);
     expect(stats.currentStreak).toBe(1);
@@ -57,6 +65,39 @@ describe('Stats', () => {
     expect(last.raw).toBeCloseTo(120, 0);
   });
 
+  it('measures speed in the characters a press produced, not in presses', () => {
+    // three presses for two kana: nothing, nothing, then both at once - which is
+    // what romaji looks like. Latin's one-press-one-character is the chars = 1 case.
+    const stats = new Stats(5);
+    for (let i = 1; i <= 30; i++) {
+      stats.push(stroke(i * 100, 'k', 'k', 'KeyK', i % 3 === 0 ? 2 : 0));
+    }
+    stats.sample(3000);
+
+    // 20 characters over 3s = 400 chars/min = 80 wpm, from 30 keystrokes
+    expect(stats.producedChars).toBe(20);
+    expect(stats.correctKeys).toBe(30);
+    expect(stats.netWpm(3000)).toBeCloseTo(80, 6);
+    expect(stats.rawWpm(3000)).toBeCloseTo(80, 6);
+    expect(stats.series[stats.series.length - 1]!.wpm).toBeCloseTo(80, 0);
+  });
+
+  it('charges a miss its share of the unit it wasted', () => {
+    const stats = new Stats(5);
+    // one kana of three presses, fumbled twice: 1 char produced, 1/3 each wasted
+    stats.push(stroke(100, 'k', 'j', 'KeyJ', 1 / 3));
+    stats.push(stroke(200, 'k', 'j', 'KeyJ', 1 / 3));
+    stats.push(stroke(300, 'k', 'k', 'KeyK', 0));
+    stats.push(stroke(400, 'y', 'y', 'KeyY', 0));
+    stats.push(stroke(500, 'a', 'a', 'KeyA', 1));
+
+    expect(stats.producedChars).toBe(1);
+    expect(stats.netWpm(60_000)).toBeCloseTo(wpmOf(1, 60_000), 6);
+    expect(stats.rawWpm(60_000)).toBeCloseTo(wpmOf(1 + 2 / 3, 60_000), 6);
+    // accuracy stays a keystroke figure: three good presses, two bad
+    expect(stats.accuracy()).toBeCloseTo(60, 6);
+  });
+
   it('attributes each error to exactly one sample window', () => {
     const stats = new Stats(5);
     stats.push(stroke(300, 'a', 'z'));
@@ -79,7 +120,8 @@ describe('Stats', () => {
 
     const summary = stats.summary(t, (code) => code);
     expect(summary.keystrokes).toBe(13);
-    expect(summary.errorChars).toBe(1);
+    expect(summary.errorKeys).toBe(1);
+    expect(summary.producedChars).toBe(12);
 
     const slowest = summary.slowGrams[0]!;
     expect(slowest.gram).toBe('qu');

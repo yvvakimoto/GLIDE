@@ -146,7 +146,6 @@ runner.onPhase = (phase, previous) => {
       summary: runner.summary(summaryLegend()),
       settings,
       spec: runner.method,
-      units: runner.unitsDone,
       quit: runner.endReason === 'quit',
     });
   }
@@ -332,8 +331,9 @@ function exposeDevHooks(): void {
         cursor: runner.cursor,
         wpm: runner.stats.netWpm(runner.elapsedMs),
         accuracy: runner.stats.accuracy(),
-        correct: runner.stats.correctChars,
-        errors: runner.stats.errorChars,
+        chars: runner.stats.producedChars,
+        correct: runner.stats.correctKeys,
+        errors: runner.stats.errorKeys,
         series: runner.stats.series.length,
         upcoming: runner.expectedChords(8).map((c) => c.label).join(''),
       }),

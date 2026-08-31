@@ -20,8 +20,6 @@ export type SummaryContext = {
   summary: Summary;
   settings: Settings;
   spec: MethodSpec;
-  /** units completed: kana for Japanese, characters for English */
-  units: number;
   quit: boolean;
 };
 
@@ -62,6 +60,8 @@ function heatMap(summary: Summary, mode: HeatMode): Map<string, number> {
   }
   return heat;
 }
+
+const perMinute = (count: number, seconds: number): number => Math.round((count / Math.max(1, seconds)) * 60);
 
 const card = (label: string, value: string, unit?: string): HTMLElement =>
   el('div', { class: 'card' }, [
@@ -163,7 +163,7 @@ export function renderSummary(ctx: SummaryContext): void {
         el('div', { class: 'summary-title', text: ctx.quit ? 'run stopped' : 'run complete' }),
         el('div', { class: 'summary-hero' }, [
           el('span', { class: 'num', style: `color:${heroColor}`, text: String(Math.round(summary.wpm)) }),
-          el('span', { class: 'unit', text: 'wpm net' }),
+          el('span', { class: 'unit', text: ctx.spec.script === 'ja' ? 'kana wpm net' : 'wpm net' }),
         ]),
       ]),
       el('div', { class: 'idle-config' }, [
@@ -183,15 +183,22 @@ export function renderSummary(ctx: SummaryContext): void {
       card('raw', String(Math.round(summary.rawWpm)), 'wpm'),
       card('accuracy', summary.accuracy >= 99.95 ? '100' : summary.accuracy.toFixed(1), '%'),
       card('consistency', summary.consistency.toFixed(0), '%'),
-      card('characters', String(summary.correctChars), `/ ${summary.keystrokes}`),
-      card('errors', String(summary.errorChars)),
+      // characters and keystrokes are different numbers now, so give them a card each
+      card('characters', String(summary.producedChars)),
+      card('keystrokes', String(summary.keystrokes)),
+      card('errors', String(summary.errorKeys)),
       card('fixes', String(summary.corrections)),
       card('best streak', String(summary.bestStreak)),
+      // Japanese speed is counted in kana, so spell that out and keep the
+      // keystroke rate beside it: that is where romaji and thumb-shift differ.
       ...(ctx.spec.script === 'ja'
-        ? [card('kana/min', String(Math.round((ctx.units / Math.max(1, seconds)) * 60)))]
+        ? [
+            card('kana/min', String(perMinute(summary.producedChars, seconds))),
+            card('keys/min', String(perMinute(summary.keystrokes, seconds))),
+          ]
         : []),
       ...(methodKind(ctx.spec) === 'romaji'
-        ? [card('keys per kana', (summary.keystrokes / Math.max(1, ctx.units)).toFixed(2))]
+        ? [card('keys per kana', (summary.keystrokes / Math.max(1, summary.producedChars)).toFixed(2))]
         : []),
     ]),
 
