@@ -1,0 +1,65 @@
+{
+ "license": "Hand-written for this project (CC0 / public domain).",
+ "sources": [
+  {
+   "id": "code-js",
+   "title": "JavaScript",
+   "author": "symbol & bracket drills",
+   "passages": [
+    "const sum = (xs) => xs.reduce((a, b) => a + b, 0);",
+    "if (n % 2 === 0) { return n / 2; } else { return 3 * n + 1; }",
+    "export function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }",
+    "const { data, error } = await fetch(url).then((r) => r.json());",
+    "for (let i = 0; i < items.length; i++) { total += items[i].price; }",
+    "type Point = { x: number; y: number; label?: string };",
+    "const byName = new Map(users.map((u) => [u.name, u]));",
+    "queue.push({ id, retries: retries + 1, at: Date.now() });",
+    "return list.filter((x) => x != null).sort((a, b) => a - b);",
+    "obj?.deep?.value ?? fallback(\"none\", { strict: true });",
+    "class Ring { #items = []; get size() { return this.#items.length; } }",
+    "throw new Error(`unexpected token at ${line}:${col}`);",
+    "const re = /^([a-z0-9_-]+)@([a-z0-9.-]+)\\.[a-z]{2,}$/i;",
+    "path = dir.replace(/\\\\/g, \"/\").split(\"/\").pop();",
+    "await Promise.all([load(\"a\"), load(\"b\")]).catch(onError);",
+    "let [head, ...rest] = path.split(\"/\").filter(Boolean);",
+    "state = { ...state, count: state.count + 1, dirty: true };"
+   ]
+  },
+  {
+   "id": "code-shell",
+   "title": "Shell & config",
+   "author": "symbol & bracket drills",
+   "passages": [
+    "grep -rn \"TODO\" src/ | awk -F: '{print $1}' | sort -u",
+    "find . -name '*.log' -mtime +7 -exec rm -f {} +",
+    "tar -czf backup-$(date +%F).tar.gz ./data --exclude='*.tmp'",
+    "curl -sS -H 'Accept: application/json' \"$API/v1/status\" | jq '.ok'",
+    "export PATH=\"$HOME/.local/bin:$PATH\" && hash -r",
+    "for f in *.md; do mv -- \"$f\" \"${f%.md}.txt\"; done",
+    "ps aux | grep -v grep | grep node | awk '{print $2}' | xargs kill -9",
+    "rsync -avz --delete ./dist/ user@host:/srv/www/ --dry-run",
+    "docker run --rm -it -v \"$PWD:/app\" -w /app node:22 npm ci",
+    "sed -i 's/localhost:8080/127.0.0.1:3000/g' config/*.yml",
+    "git log --oneline --graph --decorate -n 20 --all",
+    "test -f .env || cp .env.example .env; chmod 600 .env"
+   ]
+  },
+  {
+   "id": "code-sql",
+   "title": "SQL & data",
+   "author": "symbol & number drills",
+   "passages": [
+    "SELECT id, name, created_at FROM users WHERE active = 1 ORDER BY id DESC;",
+    "UPDATE orders SET status = 'shipped' WHERE id IN (1042, 1043, 1051);",
+    "INSERT INTO logs (level, message) VALUES ('warn', 'retry #3 failed');",
+    "SELECT c.name, COUNT(*) AS n FROM carts c GROUP BY c.name HAVING COUNT(*) > 5;",
+    "CREATE INDEX idx_events_at ON events (occurred_at DESC, kind);",
+    "DELETE FROM sessions WHERE expires_at < NOW() - INTERVAL '30 days';",
+    "SELECT AVG(latency_ms) FROM probes WHERE region = 'ap-northeast-1';",
+    "WITH recent AS (SELECT * FROM hits WHERE day >= '2024-01-01') SELECT * FROM recent;",
+    "ALTER TABLE accounts ADD COLUMN plan TEXT NOT NULL DEFAULT 'free';",
+    "SELECT 100.0 * hits / NULLIF(views, 0) AS pct FROM pages LIMIT 25;"
+   ]
+  }
+ ]
+}

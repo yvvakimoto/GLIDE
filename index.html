@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <title>GLIDE — finger-path typing trainer</title>
+    <meta name="description" content="A typing trainer that draws the path your fingers are about to take. Dvorak, Colemak, Workman, QWERTY." />
+  </head>
+  <body>
+    <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="grid-overlay" aria-hidden="true"></div>
+
+    <div id="app">
+      <div class="progress" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
+
+      <header class="hud">
+        <div class="hud-brand">
+          <span class="mark">GLIDE</span>
+          <span class="tag" id="brand-tag">finger-path trainer</span>
+        </div>
+
+        <div class="hud-stats">
+          <div class="stat stat-big">
+            <span class="value" id="stat-wpm">0</span>
+            <span class="label">wpm</span>
+          </div>
+          <div class="stat">
+            <span class="value" id="stat-time">--</span>
+            <span class="label">time</span>
+          </div>
+          <div class="stat">
+            <span class="value"><span id="stat-acc">100</span><i>%</i></span>
+            <span class="label">acc</span>
+          </div>
+          <div class="stat">
+            <span class="value" id="stat-streak">0</span>
+            <span class="label">streak</span>
+          </div>
+        </div>
+
+        <div class="hud-config" id="hud-config"></div>
+      </header>
+
+      <main class="stage">
+        <section class="upper">
+          <div class="text-viewport" id="text-viewport"></div>
+          <div class="source-line"><span id="source-line"></span></div>
+        </section>
+
+        <section class="strip">
+          <div class="strip-label">speed<i id="strip-ma">5s avg</i></div>
+          <canvas id="speed-canvas"></canvas>
+        </section>
+
+        <section class="lower">
+          <canvas id="board-canvas"></canvas>
+        </section>
+      </main>
+    </div>
+
+    <div class="overlay" id="overlay-idle" data-open="true">
+      <div class="idle-card">
+        <div class="idle-kicker">finger-path typing trainer</div>
+        <h1 class="idle-title">GLIDE</h1>
+        <p class="idle-sub">
+          The ribbon shows the next keys before you reach them. Learn the motion, not the letters.
+        </p>
+        <p class="idle-note" id="idle-note" hidden></p>
+
+        <div class="idle-start">
+          <kbd class="key-space">space</kbd>
+          <span>to start</span>
+        </div>
+        <div class="idle-hints">
+          <span><kbd>esc</kbd> finish</span>
+          <span><kbd>tab</kbd> restart</span>
+          <span><kbd>s</kbd> settings</span>
+          <span><kbd>backspace</kbd> step back</span>
+        </div>
+        <div class="idle-config" id="idle-config"></div>
+      </div>
+    </div>
+
+    <div class="overlay overlay-count" id="overlay-count">
+      <div class="count-number" id="count-number">3</div>
+    </div>
+
+    <div class="overlay overlay-scroll" id="overlay-summary">
+      <div class="summary" id="summary"></div>
+    </div>
+
+    <div class="overlay overlay-scroll" id="overlay-settings">
+      <div class="settings" id="settings"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

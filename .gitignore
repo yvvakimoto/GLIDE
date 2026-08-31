@@ -1,0 +1,6 @@
+node_modules
+dist
+.vite
+shots
+scripts/.cache
+scripts/.cache-ja

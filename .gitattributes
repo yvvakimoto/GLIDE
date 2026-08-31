@@ -1,0 +1,4 @@
+# Store and check out everything with LF, so a Windows checkout does not produce
+# whole-file diffs against the LF the tooling writes.
+* text=auto eol=lf
+*.png binary

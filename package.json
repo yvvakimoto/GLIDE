@@ -1,0 +1,32 @@
+{
+  "name": "dvorak-typing-trainer",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Finger-path typing trainer for Dvorak and other keyboard layouts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "corpus": "node scripts/build-corpus.mjs",
+    "corpus:ja": "node scripts/build-corpus-ja.mjs",
+    "fonts:ja": "node scripts/build-fonts-ja.mjs",
+    "notice": "node scripts/build-notice.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.1.0",
+    "@fontsource/jetbrains-mono": "^5.1.1",
+    "@fontsource/noto-sans-jp": "^5.3.0"
+  }
+}

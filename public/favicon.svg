@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GLIDE">
+  <defs>
+    <linearGradient id="ribbon" x1="6" y1="44" x2="58" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3dd6ff"/>
+      <stop offset="1" stop-color="#b46bff"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="#0a0c13"/>
+
+  <!-- three keycaps, the row the ribbon travels along -->
+  <g fill="none" stroke="#96aad7" stroke-opacity="0.28" stroke-width="2.5">
+    <rect x="7.5" y="34.5" width="14" height="14" rx="4"/>
+    <rect x="25.5" y="34.5" width="14" height="14" rx="4"/>
+    <rect x="43.5" y="34.5" width="14" height="14" rx="4"/>
+  </g>
+
+  <!-- the look-ahead path through them -->
+  <path d="M12 44 C 20 44, 22 20, 32 20 S 44 44, 52 30"
+        fill="none" stroke="url(#ribbon)" stroke-width="6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
