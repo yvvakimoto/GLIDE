@@ -63,7 +63,8 @@ GLIDE_CHROME="$LOCALAPPDATA/ms-playwright/chromium_headless_shell-1223/chrome-he
 
 `scripts/perf.mjs` samples `requestAnimationFrame` deltas for a few seconds in
 each of the three phases that matter — idle, running, finished — and prints the
-median and p95. Pass a second argument (`full` / `lite`) to pin `graphics`. The
+median and p95. Pass a second argument (`lite` / `rich`) to pin `graphics`, and
+`GLIDE_VIEWPORT=2560x1440` to check fill rate on a big panel. The
 headless shell renders through SwiftShader, with no GPU at all, which is exactly
 the machine this is for: the numbers are absolute nonsense as frame rates and an
 excellent proxy for fill rate. Take a reading, `git stash`, take another.
@@ -193,7 +194,8 @@ nothing about rendering.
   frame. That is why the idle screen's `space` hint pulses in `steps(10)` rather
   than smoothly, and why the drifting background parks (`data-covered` on
   `<html>`) whenever an overlay is up. Both are invisible and both are worth
-  four fifths of the idle screen's cost.
+  four fifths of the idle screen's cost under `rich`, the only mode in which any
+  of those blurs exist at all.
 - **Blur is the budget.** The background wash carries no `filter` — its circles
   are radial gradients that fade to transparent, so they were already soft and
   the 90px blur over 140% of the viewport was buying nothing at the price of a
@@ -213,12 +215,18 @@ nothing about rendering.
 - **Playwright cannot synthesise `NonConvert`/`Convert`.** The kana passes in
   `verify.mjs` use the Alt stand-ins and a Space assignment; the JIS codes are
   covered by unit tests instead.
-- **`graphics: 'lite'` has two halves and they have to stay in step.** The CSS
-  half is `:root[data-graphics='lite']` rules, written from `applySettings`; the
-  canvas half is a `lite` boolean threaded through `BoardState` into
-  `drawKeyboard` / `drawHands` / `drawGuide` / `drawChart`, plus `renderScale`
-  (`render/quality.ts`), which is the only place the device-pixel cap lives — the
-  three canvases used to hardcode 2.5 each. A new blur or glow belongs in both.
+- **`graphics` means exactly one thing: blur or no blur.** `lite` is the default
+  and it is the app with no blur in it anywhere; `rich` is opt-in. It has two
+  halves and they have to stay in step. The CSS half is **additive** — the base
+  stylesheet is the cheap page, and `:root[data-graphics='rich']` hands the
+  decoration back — because `<html>` carries no attribute until the module runs,
+  and a browser that paints the static markup first must not flash the expensive
+  page. The canvas half is a `lite` boolean threaded through `BoardState` into
+  `drawKeyboard` / `drawHands` / `drawGuide` / `drawChart`. A new blur or glow
+  belongs in both. Resolution is *not* part of it: `renderScale`
+  (`render/quality.ts`) caps the device pixel ratio at 2 in both modes, and that
+  is measured — `lite` at 2x holds sixty frames a second at 2560x1440 on a CPU
+  rasteriser. The three canvases used to hardcode 2.5 each.
 - **Adding a setting means adding a validation line** in `loadSettings`
   (`src/core/settings.ts`) — persisted values from an older build are merged over
   the defaults and must be range-checked or they silently break behaviour. This got

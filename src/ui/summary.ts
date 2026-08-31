@@ -26,12 +26,9 @@ export type SummaryContext = {
 
 type HeatMode = 'errors' | 'speed';
 
-function fitCanvas(
-  canvas: HTMLCanvasElement,
-  lite: boolean,
-): { ctx: CanvasRenderingContext2D; w: number; h: number } | undefined {
+function fitCanvas(canvas: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; w: number; h: number } | undefined {
   const rect = canvas.getBoundingClientRect();
-  const dpr = renderScale(lite);
+  const dpr = renderScale();
   const w = Math.max(1, Math.round(rect.width));
   const h = Math.max(1, Math.round(rect.height));
   canvas.width = Math.round(w * dpr);
@@ -84,7 +81,7 @@ export function renderSummary(ctx: SummaryContext): void {
   let heatMode: HeatMode = 'errors';
 
   const drawHeat = (): void => {
-    const fit = fitCanvas(heatCanvas, lite);
+    const fit = fitCanvas(heatCanvas);
     if (!fit) return;
     fit.ctx.clearRect(0, 0, fit.w, fit.h);
     drawKeyboard(fit.ctx, boardMetrics(fit.w, fit.h), {
@@ -98,7 +95,7 @@ export function renderSummary(ctx: SummaryContext): void {
   };
 
   const drawSpeed = (): void => {
-    const fit = fitCanvas(chartCanvas, lite);
+    const fit = fitCanvas(chartCanvas);
     if (!fit) return;
     fit.ctx.clearRect(0, 0, fit.w, fit.h);
     drawChart(fit.ctx, {

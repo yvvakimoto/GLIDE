@@ -115,8 +115,8 @@ export class BoardView {
     return this.flashes.size > 0 || (this.slideStart >= 0 && now - this.slideStart < SLIDE_MS);
   }
 
-  private syncSize(showHands: boolean, lite: boolean): void {
-    const dpr = renderScale(lite);
+  private syncSize(showHands: boolean): void {
+    const dpr = renderScale();
     if (this.sizeEpoch !== this.laidOut || showHands !== this.handsWanted || dpr !== this.dpr) {
       this.laidOut = this.sizeEpoch;
       this.handsWanted = showHands;
@@ -195,7 +195,7 @@ export class BoardView {
   }
 
   draw(state: BoardState): void {
-    this.syncSize(state.showHands, state.lite);
+    this.syncSize(state.showHands);
     const ctx = this.ctx;
 
     for (const [code, flash] of this.flashes) {

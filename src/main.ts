@@ -263,7 +263,7 @@ function drawSpeedStrip(now: number): void {
   stripSeries = series;
   stripDrawnAt = now;
 
-  const dpr = renderScale(settings.graphics === 'lite');
+  const dpr = renderScale();
   if (stripEpoch !== stripLaidOut || dpr !== stripScale) {
     stripLaidOut = stripEpoch;
     stripScale = dpr;

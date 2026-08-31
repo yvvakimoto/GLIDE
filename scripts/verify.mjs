@@ -187,30 +187,30 @@ async function main() {
   }
   await shot('08-colemak-blind');
 
-  // graphics: lite. Every blur in the app is off in this mode — the background
-  // wash, the frosted overlays, the canvas shadow blur — and the canvases render
-  // at 1.25x rather than 2x, so a screenshot at deviceScaleFactor 2 is where a
-  // resolution mistake would show.
+  // graphics: rich. Everything above runs in the default `lite`, which is the app
+  // with no blur in it; this is the opt-in look — background wash, frosted
+  // panels, canvas shadow blur, and a 2x rather than 1.25x backing store, so a
+  // screenshot at deviceScaleFactor 2 is where a resolution mistake would show.
   await page.keyboard.press('Escape');
   await wait(300);
   await page.evaluate(() =>
-    window.__glide.applySettings({ layout: 'dvorak', lookahead: 6, labelMode: 'layout', graphics: 'lite' }),
+    window.__glide.applySettings({ layout: 'dvorak', lookahead: 6, labelMode: 'layout', graphics: 'rich' }),
   );
   await wait(300);
-  await shot('20-lite-idle');
+  await shot('20-rich-idle');
   await page.keyboard.press('Space');
   await wait(3400);
   for (let i = 0; i < 40; i++) {
     if (!(await pressNext(page))) break;
     await wait(45);
   }
-  await shot('21-lite-running');
+  await shot('21-rich-running');
   await page.keyboard.press('Escape');
   await wait(700);
-  await shot('22-lite-summary');
+  await shot('22-rich-summary');
   await page.keyboard.press('Escape');
   await wait(300);
-  await page.evaluate(() => window.__glide.applySettings({ graphics: 'full', labelMode: 'blank' }));
+  await page.evaluate(() => window.__glide.applySettings({ graphics: 'lite', labelMode: 'blank' }));
   await wait(300);
 
   // The narrow window is the case that matters most for the finger marks: the

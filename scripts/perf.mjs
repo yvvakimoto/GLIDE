@@ -6,7 +6,9 @@ import { chromium } from 'playwright';
 
 const URL = process.env.GLIDE_URL ?? 'http://localhost:5273';
 const LABEL = process.argv[2] ?? 'run';
-const GRAPHICS = process.argv[3] ?? null;
+/** GLIDE_VIEWPORT=2560x1440 to check fill rate on a big panel */
+const [VW, VH] = (process.env.GLIDE_VIEWPORT ?? '1440x900').split('x').map(Number);
+const GRAPHICS = process.argv[3] ?? null; // 'lite' | 'rich'
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,7 +55,7 @@ const stat = (xs) => {
 const main = async () => {
   const exe = process.env.GLIDE_CHROME;
   const browser = await chromium.launch(exe ? { executablePath: exe } : {});
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+  const page = await browser.newPage({ viewport: { width: VW, height: VH }, deviceScaleFactor: 2 });
   await page.goto(URL, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.fonts.ready);
   await wait(500);

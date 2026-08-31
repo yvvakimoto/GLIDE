@@ -76,6 +76,8 @@ body::after {
   inset: -20%;
   z-index: 0;
   opacity: 0.42;
+  /* off unless the graphics setting asks for it; see the end of this file */
+  display: none;
 }
 
 .aurora i {
@@ -175,8 +177,7 @@ body::after {
   gap: 16px;
   padding: 0 22px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(10, 12, 19, 0.9), rgba(10, 12, 19, 0.35));
-  backdrop-filter: blur(8px);
+  background: linear-gradient(180deg, rgba(10, 12, 19, 0.97), rgba(10, 12, 19, 0.9));
 }
 
 .hud-brand {
@@ -371,10 +372,6 @@ body::after {
   border-radius: 3px;
 }
 
-.ch.lead {
-  text-shadow: 0 0 14px currentColor;
-}
-
 /* the character the cursor is stuck on after a miss: nothing was inserted, the
    expected character itself is marked so the eye goes straight back to it */
 .ch.stuck {
@@ -519,7 +516,6 @@ body::after {
 /* the press due now */
 .fmark.now {
   opacity: 1;
-  filter: drop-shadow(0 0 calc(var(--fm-h, 8px) * 0.5) currentColor);
 }
 
 .caret {
@@ -617,8 +613,7 @@ body::after {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(5, 6, 10, 0.66);
-  backdrop-filter: blur(9px) saturate(120%);
+  background: rgba(5, 6, 10, 0.92);
   opacity: 0;
   pointer-events: none;
   /* Four of these sit in the DOM at all times and only ever fade. Left visible,
@@ -643,8 +638,7 @@ body::after {
 }
 
 .overlay-count {
-  background: rgba(5, 6, 10, 0.35);
-  backdrop-filter: blur(3px);
+  background: rgba(5, 6, 10, 0.6);
 }
 
 /* idle */
@@ -680,7 +674,6 @@ body::after {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  filter: drop-shadow(0 6px 40px rgba(61, 214, 255, 0.28));
 }
 
 .idle-sub {
@@ -744,26 +737,26 @@ body::after {
   position: relative;
 }
 
-/* The glow breathes on a pseudo-element's opacity, which the compositor can
-   animate on its own; animating box-shadow repainted the key every frame, on
-   the one screen where the background and the overlay blur are both live. */
+/* The glow lives on a pseudo-element so it can breathe on `opacity`; animating
+   `box-shadow` repainted the key every frame. Only shown under `rich`. */
 .key-space::after {
   content: '';
   position: absolute;
   inset: -1px;
   border-radius: inherit;
   pointer-events: none;
+  display: none;
   box-shadow: 0 0 0 1px rgba(61, 214, 255, 0.24), 0 10px 44px rgba(61, 214, 255, 0.34);
   /*
    * Stepped, and that is the whole point of it.
    *
-   * This hint sits inside the idle overlay, and an overlay is a full-viewport
-   * `backdrop-filter`: a repaint anywhere in its subtree makes the browser re-run
-   * that blur over the whole screen. A smooth 60 Hz pulse therefore cost a
-   * full-screen blur per frame for as long as nobody was typing — which, on an
-   * idle typing trainer, is most of the time. Ten steps a cycle is four repaints
-   * a second, and against a glow this soft the steps read as a slow breath
-   * rather than as a stutter.
+   * This hint sits inside the idle overlay, which under `rich` is a full-viewport
+   * `backdrop-filter` — and a repaint anywhere in that subtree makes the browser
+   * re-run the filter over the whole screen. A smooth 60 Hz pulse therefore cost
+   * a full-screen blur per frame for as long as nobody was typing, which on an
+   * idle typing trainer is most of the time. Ten steps a cycle is four repaints
+   * a second, and against a glow this soft they read as a slow breath rather
+   * than as a stutter.
    */
   animation: breathe 2.4s steps(10, jump-none) infinite alternate;
 }
@@ -818,7 +811,6 @@ kbd {
   background: linear-gradient(180deg, #fff, var(--accent));
   -webkit-background-clip: text;
   background-clip: text;
-  filter: drop-shadow(0 0 50px rgba(61, 214, 255, 0.45));
 }
 
 .count-number.pop {
@@ -878,7 +870,6 @@ kbd {
   font-size: clamp(3.6rem, 9vw, 6rem);
   line-height: 0.9;
   font-variant-numeric: tabular-nums;
-  filter: drop-shadow(0 0 34px currentColor);
 }
 
 .summary-hero .unit {
@@ -1255,48 +1246,65 @@ input[type='range'] {
   }
 }
 
-/* ---------- graphics: lite ---------- */
+/* ---------- graphics: rich ---------- */
 
 /*
- * Set from `applySettings` on <html>. Everything here is a blur or a glow, and
- * every one of them is a full-surface convolution the GPU redoes whenever what
- * is underneath changes: the background wash, the frosted panels, the text
- * shadow on the look-ahead run, the drop-shadows behind the display type. The
- * canvases read `settings.graphics` directly and drop their own shadow blur and
- * a third of their resolution — see render/quality.ts.
+ * Everything above renders the app the cheap way, and that is the default: the
+ * cost of the look was not spread thin, it sat in a handful of blurs, and each
+ * one is a full-surface convolution the GPU redoes whenever anything underneath
+ * it changes. The background wash, the frosted panels, the shadow on the
+ * look-ahead run, the drop-shadows behind the display type — on a laptop with
+ * integrated graphics they came to most of a frame between them.
  *
- * Where a blur was doing legibility work rather than decoration, the surface it
- * sat on is made more opaque instead.
+ * So they are opt-in. `applySettings` writes `data-graphics` on <html>; the
+ * canvases read `settings.graphics` for their own shadow blur and resolution,
+ * see render/quality.ts. Being additive rather than a set of overrides is
+ * deliberate: <html> carries no attribute until the module runs, and a browser
+ * that paints the static markup before then must not flash the expensive page.
+ *
+ * Where a blur was doing legibility work rather than decoration, the base rule
+ * makes its surface more opaque instead, and this block hands that back.
  */
 
-:root[data-graphics='lite'] .aurora {
-  display: none;
+:root[data-graphics='rich'] .aurora {
+  display: block;
 }
 
-:root[data-graphics='lite'] .hud {
-  backdrop-filter: none;
-  background: linear-gradient(180deg, rgba(10, 12, 19, 0.97), rgba(10, 12, 19, 0.9));
+:root[data-graphics='rich'] .hud {
+  background: linear-gradient(180deg, rgba(10, 12, 19, 0.9), rgba(10, 12, 19, 0.35));
+  backdrop-filter: blur(8px);
 }
 
-:root[data-graphics='lite'] .overlay {
-  backdrop-filter: none;
-  background: rgba(5, 6, 10, 0.92);
+:root[data-graphics='rich'] .overlay {
+  background: rgba(5, 6, 10, 0.66);
+  backdrop-filter: blur(9px) saturate(120%);
 }
 
-:root[data-graphics='lite'] .overlay-count {
-  backdrop-filter: none;
-  background: rgba(5, 6, 10, 0.6);
+:root[data-graphics='rich'] .overlay-count {
+  background: rgba(5, 6, 10, 0.35);
+  backdrop-filter: blur(3px);
 }
 
-:root[data-graphics='lite'] .ch.lead,
-:root[data-graphics='lite'] .fmark.now,
-:root[data-graphics='lite'] .idle-title,
-:root[data-graphics='lite'] .count-number,
-:root[data-graphics='lite'] .summary-hero .value {
-  text-shadow: none;
-  filter: none;
+:root[data-graphics='rich'] .ch.lead {
+  text-shadow: 0 0 14px currentColor;
 }
 
-:root[data-graphics='lite'] .key-space::after {
-  display: none;
+:root[data-graphics='rich'] .fmark.now {
+  filter: drop-shadow(0 0 calc(var(--fm-h, 8px) * 0.5) currentColor);
+}
+
+:root[data-graphics='rich'] .idle-title {
+  filter: drop-shadow(0 6px 40px rgba(61, 214, 255, 0.28));
+}
+
+:root[data-graphics='rich'] .count-number {
+  filter: drop-shadow(0 0 50px rgba(61, 214, 255, 0.45));
+}
+
+:root[data-graphics='rich'] .summary-hero .value {
+  filter: drop-shadow(0 0 34px currentColor);
+}
+
+:root[data-graphics='rich'] .key-space::after {
+  display: block;
 }

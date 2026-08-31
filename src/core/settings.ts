@@ -5,7 +5,7 @@ import type { JaMethod } from './method';
 export type InputMode = 'remap' | 'passthrough';
 export type ErrorMode = 'block' | 'advance';
 export type LabelMode = 'layout' | 'physical' | 'blank';
-export type GraphicsMode = 'full' | 'lite';
+export type GraphicsMode = 'lite' | 'rich';
 
 export type Settings = {
   /** latin layout, used for English text and for romaji input */
@@ -39,10 +39,11 @@ export type Settings = {
   fingerColors: boolean;
   sound: boolean;
   /**
-   * `lite` drops every blur — the background wash, the backdrop filters behind
-   * the overlays, the canvas shadows — and renders the canvases below one device
-   * pixel per CSS pixel. It is the setting for a machine whose GPU is the
-   * bottleneck, not a taste one.
+   * `lite`, the default, is the app with no blur in it anywhere: no background
+   * wash, no frosted overlays, no canvas shadow, and a lower device-pixel cap.
+   * `rich` hands all of that back, and costs most of a frame on integrated
+   * graphics to do it. Every cue the trainer actually teaches with — the ribbon,
+   * the finger colours, the marks, the hands — is in both.
    */
   graphics: GraphicsMode;
 };
@@ -68,7 +69,7 @@ export const THUMB_CANDIDATES: ReadonlyArray<{ code: string; label: string; note
 export const THUMB_PERCENTS = [0, 25, 50, 75, 100] as const;
 export const LOOKAHEAD_RANGE = { min: 0, max: 10 } as const;
 export const MA_WINDOWS = [2, 5, 10, 20] as const;
-export const GRAPHICS_MODES: readonly GraphicsMode[] = ['full', 'lite'];
+export const GRAPHICS_MODES: readonly GraphicsMode[] = ['lite', 'rich'];
 
 export const DEFAULT_SETTINGS: Settings = {
   layout: 'dvorak',
@@ -88,7 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fingerMarks: true,
   fingerColors: true,
   sound: true,
-  graphics: 'full',
+  graphics: 'lite',
 };
 
 const STORAGE_KEY = 'dvorak-trainer/settings/v1';

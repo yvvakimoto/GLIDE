@@ -292,11 +292,11 @@ export function renderSettingsPanel(opts: SettingsPanelOptions): void {
       ),
       row(
         'graphics',
-        'lite drops the background glow, the frosted panels and the soft shadows, and renders at a lower resolution',
+        'rich adds the background glow, the frosted panels and the soft shadows back. Nothing the trainer teaches with is in either one alone',
         segmented(
           [
-            { value: 'full' as const, label: 'full' },
-            { value: 'lite' as const, label: 'lite', sub: 'if the fan spins up' },
+            { value: 'lite' as const, label: 'lite', sub: 'no blur anywhere' },
+            { value: 'rich' as const, label: 'rich', sub: 'wants a real gpu' },
           ],
           s.graphics,
           (graphics) => set({ graphics }),
