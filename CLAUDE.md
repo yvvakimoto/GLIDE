@@ -22,6 +22,7 @@ npm run build        # tsc --noEmit, then a production bundle
 npm run corpus       # rebuild the English corpus from Project Gutenberg
 npm run corpus:ja    # rebuild the Japanese corpus from 青空文庫
 npm run notice       # regenerate NOTICE.md from the corpora — run after either corpus
+npm run perf         # frame-time probe against the dev server, see below
 npm run fonts:ja     # regenerate src/style/fonts-ja.css, the bundled kana subsets
 ```
 
@@ -53,6 +54,19 @@ GLIDE_CHROME="$LOCALAPPDATA/ms-playwright/chromium_headless_shell-1223/chrome-he
 
 Read the screenshots. Several real bugs in this project were only visible in one
 (a canvas blowing past the viewport, a layout table that silently lost a key).
+
+For anything that touches drawing, measure it too:
+
+```bash
+GLIDE_CHROME="$LOCALAPPDATA/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-win64/chrome-headless-shell.exe" node scripts/perf.mjs before
+```
+
+`scripts/perf.mjs` samples `requestAnimationFrame` deltas for a few seconds in
+each of the three phases that matter — idle, running, finished — and prints the
+median and p95. Pass a second argument (`full` / `lite`) to pin `graphics`. The
+headless shell renders through SwiftShader, with no GPU at all, which is exactly
+the machine this is for: the numbers are absolute nonsense as frame rates and an
+excellent proxy for fill rate. Take a reading, `git stash`, take another.
 
 ## Architecture
 
@@ -156,12 +170,55 @@ nothing about rendering.
 - **A canvas in a grid needs an explicit row.** `.lower { grid-template-rows:
   minmax(0, 1fr) }` is load-bearing: without it `height: 100%` resolves against a
   content-sized row and the canvas expands to its intrinsic 2:1 aspect.
+- **The frame loop is gated, and the board is not redrawn unless something moved.**
+  `main.ts` draws the board every frame only while `phase` is `running` or
+  `countin`, or while `board.busy(now)` (a press bloom or the ribbon slide is
+  still alive); otherwise it waits for `boardDirty`. Anything that changes what
+  the board should look like has to set that flag — `onPhase`, `onKeystroke`,
+  `onTextChange`, `applySettings`, and `board.onInvalidate` from the canvas's
+  ResizeObserver. Add a new source of board state and you must add a sixth. The
+  speed strip has the same shape keyed on `stats.series.length`, because the
+  chart only gains a point every `SAMPLE_MS`.
+- **The keycaps are baked, not drawn.** `BoardView` renders all sixty-one caps
+  into an offscreen canvas and blits it, rebaking only when `capSignature`
+  changes — metrics, dpr, `fingerColors`, `fade`, `lite`, `nextCode`, and the
+  contents of the `upcoming` and `holds` maps, plus the identity of `labels` and
+  `heat`. **Any new input to `drawKeyboard` must go into that signature**, or it
+  will render once and then be stuck. Live presses are drawn on top by
+  `drawKeyFlash`, which repaints the whole cap rather than stamping the bloom
+  over it, because the bloom belongs under the border and the gloss.
+- **Nothing may repaint inside an element with `backdrop-filter`.** A repaint
+  anywhere in that subtree makes the browser re-run the filter over the whole
+  viewport, so one small animation inside an overlay costs a full-screen blur per
+  frame. That is why the idle screen's `space` hint pulses in `steps(10)` rather
+  than smoothly, and why the drifting background parks (`data-covered` on
+  `<html>`) whenever an overlay is up. Both are invisible and both are worth
+  four fifths of the idle screen's cost.
+- **Blur is the budget.** The background wash carries no `filter` — its circles
+  are radial gradients that fade to transparent, so they were already soft and
+  the 90px blur over 140% of the viewport was buying nothing at the price of a
+  full-screen convolution every frame the circles moved. Canvas `shadowBlur` is
+  the same trap: each one is a render-to-offscreen, blur and composite. Reach for
+  a soft gradient before reaching for a blur.
+- **The ribbon is stroked in bands, and the alpha is pre-composited for it.**
+  `guide.ts` groups the sampled curve into fourteen constant-colour bands and
+  strokes each as one path, instead of one `stroke()` per sample segment — which
+  was ~334 draw calls a frame. Overlapping round caps used to lay the colour down
+  several times, and the ribbon's weight came from that build-up, so `overlaid()`
+  raises each band's alpha by `1 - (1 - a)^coats` to land in the same place.
+  Change the sample count or the band count and that compensation follows.
 - **`requestAnimationFrame` does not run in a hidden tab**, so the app renders
   nothing when the browser pane is not displayed. That is why verification goes
   through Playwright rather than the in-app browser.
 - **Playwright cannot synthesise `NonConvert`/`Convert`.** The kana passes in
   `verify.mjs` use the Alt stand-ins and a Space assignment; the JIS codes are
   covered by unit tests instead.
+- **`graphics: 'lite'` has two halves and they have to stay in step.** The CSS
+  half is `:root[data-graphics='lite']` rules, written from `applySettings`; the
+  canvas half is a `lite` boolean threaded through `BoardState` into
+  `drawKeyboard` / `drawHands` / `drawGuide` / `drawChart`, plus `renderScale`
+  (`render/quality.ts`), which is the only place the device-pixel cap lives — the
+  three canvases used to hardcode 2.5 each. A new blur or glow belongs in both.
 - **Adding a setting means adding a validation line** in `loadSettings`
   (`src/core/settings.ts`) — persisted values from an older build are merged over
   the defaults and must be range-checked or they silently break behaviour. This got

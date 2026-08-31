@@ -15,6 +15,7 @@ import { buildUnits, keyLabels, methodCharset, methodKind, type KeyLabel, type M
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './core/settings';
 import { BoardView } from './render/board';
 import { drawChart } from './render/chart';
+import { renderScale } from './render/quality';
 import { byId, setOpen } from './ui/dom';
 import { hudRefs, renderConfigChips, updateHud } from './ui/hud';
 import { renderSettingsPanel } from './ui/settings-panel';
@@ -80,6 +81,12 @@ const settingsRoot = byId('settings');
 
 let settingsOpen = false;
 let lastCountNumber = 0;
+/** the board is redrawn on demand outside a run; see `frame` */
+let boardDirty = true;
+
+board.onInvalidate = () => {
+  boardDirty = true;
+};
 
 let labelCache: { key: string; value: Map<string, KeyLabel> } | undefined;
 
@@ -105,6 +112,10 @@ function applySettings(patch: Partial<Settings>): void {
   renderConfigChips(refs, settings, openSettings);
   if (settingsOpen) renderPanel();
   textView.sync(runner.text, runner.cursor);
+  // the stylesheet reads this to drop the blurs; the canvases read the setting
+  document.documentElement.dataset.graphics = settings.graphics;
+  boardDirty = true;
+  stripEpoch++;
 }
 
 function renderPanel(): void {
@@ -126,11 +137,15 @@ function closeSettings(): void {
   settingsOpen = false;
 }
 
-runner.onTextChange = () => textView.sync(runner.text, runner.cursor);
+runner.onTextChange = () => {
+  textView.sync(runner.text, runner.cursor);
+  boardDirty = true;
+};
 
 runner.onKeystroke = (event) => {
   board.noteKeystroke(event.code, event.correct, performance.now());
   clicker.click(event.correct);
+  boardDirty = true;
 };
 
 
@@ -139,6 +154,7 @@ window.addEventListener('keyup', (event) => {
 });
 
 runner.onPhase = (phase, previous) => {
+  boardDirty = true;
   if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) board.reset();
   if (phase === 'finished') {
     renderSummary({
@@ -209,36 +225,73 @@ window.addEventListener('blur', () => {
   if (runner.phase === 'running') runner.abort(performance.now());
 });
 
+const stripCtx = speedCanvas.getContext('2d');
+let stripWidth = 0;
+let stripHeight = 0;
+let stripScale = 0;
+let stripEpoch = 0;
+let stripLaidOut = -1;
+/** the last state the strip was drawn for: series length, and the sliding window */
+let stripSeries = -1;
+let stripDrawnAt = -Infinity;
+
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => {
+    stripEpoch++;
+  }).observe(speedCanvas);
+}
+
+/**
+ * The strip is redrawn on new data, not on new frames. `stats.ts` samples every
+ * 250 ms, so sixty redraws a second were fifteen times more than the chart had
+ * anything to say — and each one carried a blurred stroke the width of the bar.
+ * An untimed run is the exception: its x window slides continuously, so it gets
+ * a capped ten frames a second.
+ */
+const STRIP_SLIDE_MS = 100;
+
 function drawSpeedStrip(now: number): void {
-  const rect = speedCanvas.getBoundingClientRect();
-  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-  const w = Math.max(1, Math.round(rect.width));
-  const h = Math.max(1, Math.round(rect.height));
-  if (speedCanvas.width !== Math.round(w * dpr) || speedCanvas.height !== Math.round(h * dpr)) {
-    speedCanvas.width = Math.round(w * dpr);
-    speedCanvas.height = Math.round(h * dpr);
+  if (!stripCtx) return;
+
+  const series = runner.stats.series.length;
+  const sliding = settings.duration === 0 && runner.phase === 'running';
+  const stale =
+    stripEpoch !== stripLaidOut ||
+    series !== stripSeries ||
+    (sliding && now - stripDrawnAt >= STRIP_SLIDE_MS);
+  if (!stale) return;
+  stripSeries = series;
+  stripDrawnAt = now;
+
+  const dpr = renderScale(settings.graphics === 'lite');
+  if (stripEpoch !== stripLaidOut || dpr !== stripScale) {
+    stripLaidOut = stripEpoch;
+    stripScale = dpr;
+    const rect = speedCanvas.getBoundingClientRect();
+    stripWidth = Math.max(1, Math.round(rect.width));
+    stripHeight = Math.max(1, Math.round(rect.height));
+    speedCanvas.width = Math.round(stripWidth * dpr);
+    speedCanvas.height = Math.round(stripHeight * dpr);
   }
-  const ctx = speedCanvas.getContext('2d');
-  if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
+  stripCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  stripCtx.clearRect(0, 0, stripWidth, stripHeight);
 
   const elapsed = runner.elapsedMs / 1000;
   const windowed = settings.duration === 0;
   const xMax = windowed ? Math.max(30, elapsed) : settings.duration;
   const xMin = windowed ? Math.max(0, xMax - 30) : 0;
 
-  drawChart(ctx, {
+  drawChart(stripCtx, {
     series: runner.stats.series,
-    width: w,
-    height: h,
+    width: stripWidth,
+    height: stripHeight,
     xMax,
     xMin,
     maWindow: settings.maWindow,
     readout: true,
+    lite: settings.graphics === 'lite',
     padding: { top: 16, right: 30, bottom: 6, left: 4 },
   });
-  void now;
 }
 
 function frame(): void {
@@ -250,6 +303,16 @@ function frame(): void {
   setOpen(overlays.count, phase === 'countin');
   setOpen(overlays.summary, phase === 'finished' && !settingsOpen);
   setOpen(overlays.settings, settingsOpen);
+
+  // An overlay is a full-viewport backdrop blur, and the browser can only leave
+  // it alone while what is behind it holds still — the drifting background on its
+  // own is enough to make it re-blur the whole screen every frame. Through nine
+  // pixels of blur that drift is not visible anyway, so it parks while a panel is
+  // up. The stylesheet reads this; every phase but `running` has an overlay.
+  const covered = phase !== 'running' ? 'true' : 'false';
+  if (document.documentElement.dataset.covered !== covered) {
+    document.documentElement.dataset.covered = covered;
+  }
 
   if (phase === 'countin') {
     const n = runner.countInNumber;
@@ -272,16 +335,24 @@ function frame(): void {
     live: phase !== 'finished',
   });
 
-  board.draw({
-    labels: labels(),
-    spec: runner.method,
-    fingerColors: settings.fingerColors,
-    showHands: settings.showHands,
-    chords: runner.expectedChords(settings.lookahead),
-    now,
-    guideOpacity: phase === 'finished' ? 0 : phase === 'idle' ? 0.8 : 1,
-    ...(phase === 'finished' ? { fade: 0.5 } : {}),
-  });
+  // Outside a run the board is a still picture behind a full-screen backdrop
+  // blur, and repainting it sixty times a second is what stops the compositor
+  // caching that blur. So it is drawn on demand: on a phase change, a settings
+  // change or a resize, and for as long as the last press is still blooming.
+  if (phase === 'running' || phase === 'countin' || board.busy(now) || boardDirty) {
+    boardDirty = false;
+    board.draw({
+      labels: labels(),
+      spec: runner.method,
+      fingerColors: settings.fingerColors,
+      showHands: settings.showHands,
+      chords: runner.expectedChords(settings.lookahead),
+      now,
+      guideOpacity: phase === 'finished' ? 0 : phase === 'idle' ? 0.8 : 1,
+      lite: settings.graphics === 'lite',
+      ...(phase === 'finished' ? { fade: 0.5 } : {}),
+    });
+  }
 
   drawSpeedStrip(now);
   updateHud(refs, runner);
@@ -360,6 +431,7 @@ function noteInputRequirements(): void {
   note.hidden = false;
 }
 
+document.documentElement.dataset.graphics = settings.graphics;
 checkCoverage();
 exposeDevHooks();
 noteInputRequirements();

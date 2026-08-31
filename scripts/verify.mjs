@@ -187,6 +187,32 @@ async function main() {
   }
   await shot('08-colemak-blind');
 
+  // graphics: lite. Every blur in the app is off in this mode — the background
+  // wash, the frosted overlays, the canvas shadow blur — and the canvases render
+  // at 1.25x rather than 2x, so a screenshot at deviceScaleFactor 2 is where a
+  // resolution mistake would show.
+  await page.keyboard.press('Escape');
+  await wait(300);
+  await page.evaluate(() =>
+    window.__glide.applySettings({ layout: 'dvorak', lookahead: 6, labelMode: 'layout', graphics: 'lite' }),
+  );
+  await wait(300);
+  await shot('20-lite-idle');
+  await page.keyboard.press('Space');
+  await wait(3400);
+  for (let i = 0; i < 40; i++) {
+    if (!(await pressNext(page))) break;
+    await wait(45);
+  }
+  await shot('21-lite-running');
+  await page.keyboard.press('Escape');
+  await wait(700);
+  await shot('22-lite-summary');
+  await page.keyboard.press('Escape');
+  await wait(300);
+  await page.evaluate(() => window.__glide.applySettings({ graphics: 'full', labelMode: 'blank' }));
+  await wait(300);
+
   // The narrow window is the case that matters most for the finger marks: the
   // font bottoms out at its clamp minimum *and* the board drops the hand
   // schematics, so the marks are the only fingering left on the screen.

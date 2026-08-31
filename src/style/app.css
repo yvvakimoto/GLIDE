@@ -58,12 +58,24 @@ body::after {
 
 /* ---------- background ---------- */
 
+/*
+ * Three soft washes drifting behind everything.
+ *
+ * This used to sit inside `filter: blur(90px) saturate(140%)` over a surface
+ * 140% of the viewport, with the three circles blended `screen` and animating
+ * forever. A transform on a child invalidates its filtered ancestor, so that
+ * blur was re-evaluated every frame of every phase, idle included — on its own
+ * the largest GPU cost in the app. The circles are radial gradients that fade to
+ * transparent, which is to say they were already blurred; the filter was paying
+ * a full-screen convolution to soften something soft. The stops are opened up a
+ * little to make up the difference, and `screen` goes with it because the page
+ * behind is near black, where screen and normal compositing agree.
+ */
 .aurora {
   position: fixed;
   inset: -20%;
   z-index: 0;
-  filter: blur(90px) saturate(140%);
-  opacity: 0.5;
+  opacity: 0.42;
 }
 
 .aurora i {
@@ -72,20 +84,20 @@ body::after {
   width: 46vmax;
   height: 46vmax;
   border-radius: 50%;
-  mix-blend-mode: screen;
   animation: drift 26s ease-in-out infinite alternate;
+  will-change: transform;
 }
 
 .aurora i:nth-child(1) {
   left: 4%;
   top: 6%;
-  background: radial-gradient(circle, rgba(61, 214, 255, 0.5), transparent 65%);
+  background: radial-gradient(circle, rgba(61, 214, 255, 0.42) 0%, rgba(61, 214, 255, 0.16) 34%, transparent 72%);
 }
 
 .aurora i:nth-child(2) {
   right: 2%;
   top: 22%;
-  background: radial-gradient(circle, rgba(180, 107, 255, 0.45), transparent 65%);
+  background: radial-gradient(circle, rgba(180, 107, 255, 0.38) 0%, rgba(180, 107, 255, 0.14) 34%, transparent 72%);
   animation-duration: 33s;
   animation-direction: alternate-reverse;
 }
@@ -93,8 +105,13 @@ body::after {
 .aurora i:nth-child(3) {
   left: 30%;
   bottom: -12%;
-  background: radial-gradient(circle, rgba(61, 242, 182, 0.3), transparent 65%);
+  background: radial-gradient(circle, rgba(61, 242, 182, 0.26) 0%, rgba(61, 242, 182, 0.1) 34%, transparent 72%);
   animation-duration: 41s;
+}
+
+/* Set by the frame loop while any overlay is up: see main.ts. */
+:root[data-covered='true'] .aurora i {
+  animation-play-state: paused;
 }
 
 @keyframes drift {
@@ -138,12 +155,15 @@ body::after {
   z-index: 5;
 }
 
+/* scaleX rather than width: the value already arrives smooth, once a frame, and
+   width would relayout and repaint the glow with it */
 .progress-fill {
   height: 100%;
-  width: 0;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   box-shadow: 0 0 12px rgba(61, 214, 255, 0.7);
-  transition: width 0.12s linear;
 }
 
 /* ---------- hud ---------- */
@@ -601,12 +621,19 @@ body::after {
   backdrop-filter: blur(9px) saturate(120%);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.22s ease;
+  /* Four of these sit in the DOM at all times and only ever fade. Left visible,
+     each closed one still carries a full-viewport backdrop-filter into the paint
+     tree; `visibility` retires them, and delaying it by the fade keeps the
+     transition. */
+  visibility: hidden;
+  transition: opacity 0.22s ease, visibility 0s linear 0.22s;
 }
 
 .overlay[data-open='true'] {
   opacity: 1;
   pointer-events: auto;
+  visibility: visible;
+  transition: opacity 0.22s ease, visibility 0s;
 }
 
 .overlay-scroll {
@@ -714,12 +741,36 @@ body::after {
   box-shadow: 0 0 0 1px rgba(61, 214, 255, 0.08), 0 8px 30px rgba(61, 214, 255, 0.16);
   color: #d9f4ff;
   font-family: var(--mono);
-  animation: breathe 2.4s ease-in-out infinite;
+  position: relative;
+}
+
+/* The glow breathes on a pseudo-element's opacity, which the compositor can
+   animate on its own; animating box-shadow repainted the key every frame, on
+   the one screen where the background and the overlay blur are both live. */
+.key-space::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(61, 214, 255, 0.24), 0 10px 44px rgba(61, 214, 255, 0.34);
+  /*
+   * Stepped, and that is the whole point of it.
+   *
+   * This hint sits inside the idle overlay, and an overlay is a full-viewport
+   * `backdrop-filter`: a repaint anywhere in its subtree makes the browser re-run
+   * that blur over the whole screen. A smooth 60 Hz pulse therefore cost a
+   * full-screen blur per frame for as long as nobody was typing — which, on an
+   * idle typing trainer, is most of the time. Ten steps a cycle is four repaints
+   * a second, and against a glow this soft the steps read as a slow breath
+   * rather than as a stutter.
+   */
+  animation: breathe 2.4s steps(10, jump-none) infinite alternate;
 }
 
 @keyframes breathe {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(61, 214, 255, 0.08), 0 8px 30px rgba(61, 214, 255, 0.14); }
-  50% { box-shadow: 0 0 0 1px rgba(61, 214, 255, 0.24), 0 10px 44px rgba(61, 214, 255, 0.34); }
+  from { opacity: 0.3; }
+  to { opacity: 1; }
 }
 
 kbd {
@@ -1202,4 +1253,50 @@ input[type='range'] {
     animation-duration: 0.001s !important;
     transition-duration: 0.001s !important;
   }
+}
+
+/* ---------- graphics: lite ---------- */
+
+/*
+ * Set from `applySettings` on <html>. Everything here is a blur or a glow, and
+ * every one of them is a full-surface convolution the GPU redoes whenever what
+ * is underneath changes: the background wash, the frosted panels, the text
+ * shadow on the look-ahead run, the drop-shadows behind the display type. The
+ * canvases read `settings.graphics` directly and drop their own shadow blur and
+ * a third of their resolution — see render/quality.ts.
+ *
+ * Where a blur was doing legibility work rather than decoration, the surface it
+ * sat on is made more opaque instead.
+ */
+
+:root[data-graphics='lite'] .aurora {
+  display: none;
+}
+
+:root[data-graphics='lite'] .hud {
+  backdrop-filter: none;
+  background: linear-gradient(180deg, rgba(10, 12, 19, 0.97), rgba(10, 12, 19, 0.9));
+}
+
+:root[data-graphics='lite'] .overlay {
+  backdrop-filter: none;
+  background: rgba(5, 6, 10, 0.92);
+}
+
+:root[data-graphics='lite'] .overlay-count {
+  backdrop-filter: none;
+  background: rgba(5, 6, 10, 0.6);
+}
+
+:root[data-graphics='lite'] .ch.lead,
+:root[data-graphics='lite'] .fmark.now,
+:root[data-graphics='lite'] .idle-title,
+:root[data-graphics='lite'] .count-number,
+:root[data-graphics='lite'] .summary-hero .value {
+  text-shadow: none;
+  filter: none;
+}
+
+:root[data-graphics='lite'] .key-space::after {
+  display: none;
 }

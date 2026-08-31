@@ -113,11 +113,48 @@ export type GuideDrawOptions = {
   fingerColors: boolean;
   /** global multiplier, used to fade the ribbon in and out */
   opacity: number;
+  /** low-cost mode: fewer bands along the ribbon */
+  lite?: boolean;
 };
 
-const SAMPLES = 168;
+/** Curve samples per control point, and the ceiling a long ribbon stops at. */
+const SAMPLES_PER_SPAN = 24;
+const SAMPLES_MAX = 168;
 const HEAD_ALPHA = 0.98;
 const FALLOFF = 1.35;
+
+/**
+ * How many constant-colour bands the ribbon is stroked in.
+ *
+ * The alpha, the width and the finger colour all vary continuously along the
+ * curve, and the honest way to draw that is one `stroke()` per sample segment —
+ * which came to about three hundred and forty draw calls a frame, each with its
+ * own freshly built `rgba()` string. Quantising into bands and stroking each
+ * band as a single path costs an order of magnitude less and is invisible,
+ * because round caps make the seam between two bands a continuous edge.
+ */
+const BANDS = 14;
+const BANDS_LITE = 6;
+/** the wide translucent underpass, then the bright core */
+const PASSES = [1, 0] as const;
+
+/**
+ * The alpha one continuous stroke needs to match a chain of overlapping ones.
+ *
+ * Stroking segment by segment with a round cap does not lay the colour down
+ * once: a cap of width `w` on a segment of length `l` is painted over by its
+ * neighbours about `w / l` times, and the ribbon's look came from that build-up
+ * as much as from the alpha ramp — the tail was roughly twice as solid as its
+ * nominal alpha. Drawing a band as a single path lays it down exactly once, so
+ * the alpha has to be pre-composited to land in the same place: n coats of `a`
+ * come to `1 - (1 - a)^n`. Capped, because the glow underpass is wide enough
+ * that its `w / l` runs away.
+ */
+const MAX_COATS = 6;
+function overlaid(alpha: number, width: number, segment: number): number {
+  const coats = Math.min(MAX_COATS, Math.max(1, width / Math.max(0.01, segment)));
+  return 1 - (1 - Math.min(1, alpha)) ** coats;
+}
 
 function clipSamples(samples: Sample[], startU: number): Sample[] {
   if (startU <= 0) return samples;
@@ -157,8 +194,10 @@ export function drawGuide(ctx: CanvasRenderingContext2D, m: BoardMetrics, opts: 
   ctx.lineJoin = 'round';
 
   if (guide.points.length >= 2) {
+    // A three-key ribbon does not need a six-key ribbon's worth of samples.
+    const count = Math.min(SAMPLES_MAX, SAMPLES_PER_SPAN * (guide.points.length - 1));
     const dense = sampleCatmullRom(guide.points, 18);
-    const { samples } = resampleUniform(dense, SAMPLES);
+    const { samples } = resampleUniform(dense, count);
     const startU = guide.hasTail ? Math.min(1, Math.max(0, opts.phase)) : 0;
     const path = clipSamples(samples, startU);
 
@@ -172,27 +211,43 @@ export function drawGuide(ctx: CanvasRenderingContext2D, m: BoardMetrics, opts: 
       }
       const total = dist[dist.length - 1]! || 1;
       const flow = now / 620;
+      const bands = opts.lite ? BANDS_LITE : BANDS;
 
-      for (const pass of [1, 0] as const) {
-        for (let i = 1; i < path.length; i++) {
-          const a = path[i - 1]!;
-          const b = path[i]!;
-          const s = (dist[i - 1]! + dist[i]!) / 2 / total;
+      for (const pass of PASSES) {
+        for (let band = 0; band < bands; band++) {
+          // the band's mid-point drives its colour, alpha and width
+          const s = (band + 0.5) / bands;
           const ramp = (1 - s) ** FALLOFF;
           const shimmer = 0.88 + 0.12 * Math.sin((s * 3.1 - flow) * Math.PI * 2);
           const width = m.unit * (0.15 - 0.1 * s);
-          const c = colorAt((a.u + b.u) / 2);
+          const lo = (band / bands) * total;
+          const hi = ((band + 1) / bands) * total;
 
+          let started = false;
+          let uSum = 0;
+          let uCount = 0;
           ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          if (pass === 1) {
-            ctx.lineWidth = width * 3.2;
-            ctx.strokeStyle = rgba(c, ramp * 0.13 * opacity);
-          } else {
-            ctx.lineWidth = width;
-            ctx.strokeStyle = rgba(c, ramp * HEAD_ALPHA * shimmer * opacity);
+          for (let i = 1; i < path.length; i++) {
+            const mid = (dist[i - 1]! + dist[i]!) / 2;
+            // one segment of overlap on each side, so bands butt rather than gap
+            if (mid < lo || mid >= hi) continue;
+            const a = path[i - 1]!;
+            const b = path[i]!;
+            if (!started) {
+              ctx.moveTo(a.x, a.y);
+              started = true;
+            }
+            ctx.lineTo(b.x, b.y);
+            uSum += (a.u + b.u) / 2;
+            uCount++;
           }
+          if (!started) continue;
+
+          const c = colorAt(uSum / uCount);
+          const lineWidth = pass === 1 ? width * 3.2 : width;
+          const alpha = pass === 1 ? ramp * 0.13 * opacity : ramp * HEAD_ALPHA * shimmer * opacity;
+          ctx.lineWidth = lineWidth;
+          ctx.strokeStyle = rgba(c, overlaid(alpha, lineWidth, (hi - lo) / uCount));
           ctx.stroke();
         }
       }

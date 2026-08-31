@@ -73,6 +73,7 @@ export class TextView {
   private stuckAt: number | null = null;
   private lastBlocked = false;
   private lastPlan = '';
+  private lastTint = '';
   /**
    * Bumped whenever the geometry underneath the overlays changes — a rebuild, or
    * a resize, which rewraps the text. Without it both the marks and the caret go
@@ -159,6 +160,7 @@ export class TextView {
     this.lastCursor = -1;
     this.lastBlocked = false;
     this.lastPlan = '';
+    this.lastTint = '';
     this.stuckAt = null;
     this.geomEpoch++;
     this.snap = true;
@@ -306,25 +308,36 @@ export class TextView {
     const leads = opts.live ? cues.filter((cue) => cue.slot === 0) : [];
     const span = Math.max(1, opts.lookahead);
 
-    // finger tint on the look-ahead run
-    for (const index of this.tinted) {
-      const node = this.spans[index - this.start];
-      if (node) {
-        node.style.color = '';
-        node.style.opacity = '';
-        node.classList.remove('lead');
+    // Finger tint on the look-ahead run. Like the marks below, this only moves
+    // on a keystroke, and it used to clear and rewrite an inline colour, an
+    // inline opacity and a class on every look-ahead span every frame — leaving
+    // the document style-dirty for the canvas sizing to trip over.
+    // `blocked` is in the signature because a mistype marks the character under
+    // the cursor without moving the plan, and a character that is no longer
+    // pending must lose its tint.
+    let tint = `${this.start}|${cursor}|${opts.blocked}|${opts.fingerColors}|${span}`;
+    for (const cue of leads) tint += `|${cue.index}.${cue.span}.${cue.at}${cue.finger}`;
+    if (tint !== this.lastTint || this.geomEpoch !== this.laidOut) {
+      this.lastTint = tint;
+      for (const index of this.tinted) {
+        const node = this.spans[index - this.start];
+        if (node) {
+          node.style.color = '';
+          node.style.opacity = '';
+          node.classList.remove('lead');
+        }
       }
-    }
-    this.tinted = [];
-    for (const cue of leads) {
-      const ramp = (1 - cue.at / span) ** 1.3;
-      for (let i = cue.index; i < cue.index + cue.span; i++) {
-        const node = this.spans[i - this.start];
-        if (!node || states[i] !== CharState.Pending) continue;
-        if (opts.fingerColors) node.style.color = FINGER_COLOR[cue.finger];
-        node.style.opacity = String(0.45 + 0.55 * ramp);
-        node.classList.add('lead');
-        this.tinted.push(i);
+      this.tinted = [];
+      for (const cue of leads) {
+        const ramp = (1 - cue.at / span) ** 1.3;
+        for (let i = cue.index; i < cue.index + cue.span; i++) {
+          const node = this.spans[i - this.start];
+          if (!node || states[i] !== CharState.Pending) continue;
+          if (opts.fingerColors) node.style.color = FINGER_COLOR[cue.finger];
+          node.style.opacity = String(0.45 + 0.55 * ramp);
+          node.classList.add('lead');
+          this.tinted.push(i);
+        }
       }
     }
 

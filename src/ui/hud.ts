@@ -39,6 +39,11 @@ export function hudRefs(): HudRefs {
   };
 }
 
+/** Writes an inline style only when it changed; see `setText`. */
+function setStyle(node: HTMLElement, prop: 'color' | 'transform', value: string): void {
+  if (node.style[prop] !== value) node.style[prop] = value;
+}
+
 const formatClock = (ms: number): string => {
   const total = Math.ceil(ms / 1000);
   const m = Math.floor(total / 60);
@@ -87,7 +92,7 @@ export function updateHud(refs: HudRefs, runner: Runner): void {
   const wpm = !live ? 0 : runner.phase === 'finished' ? runner.stats.netWpm(elapsed) : lastMa;
 
   setText(refs.wpm, String(Math.round(wpm)));
-  refs.wpm.style.color = rgba(speedRgb(wpm), 1);
+  setStyle(refs.wpm, 'color', rgba(speedRgb(wpm), 1));
 
   const remaining = runner.remainingMs;
   setText(refs.time, remaining === null ? (live ? formatClock(elapsed) : 'open') : formatClock(remaining));
@@ -96,7 +101,10 @@ export function updateHud(refs: HudRefs, runner: Runner): void {
   setText(refs.acc, acc >= 99.95 ? '100' : acc.toFixed(1));
   setText(refs.streak, String(runner.stats.currentStreak));
 
-  refs.progress.style.width = `${(live ? runner.progress : 0) * 100}%`;
+  // scaleX, not width: width is a layout property, it carries the bar's glow
+  // with it, and its transition used to be restarted by every frame's new value
+  const progress = Math.round((live ? runner.progress : 0) * 1000) / 1000;
+  setStyle(refs.progress, 'transform', `scaleX(${progress})`);
 
   const attribution = runner.attribution;
   setText(
