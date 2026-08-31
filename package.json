@@ -13,6 +13,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "perf": "node scripts/perf.mjs",
     "corpus": "node scripts/build-corpus.mjs",
     "corpus:ja": "node scripts/build-corpus-ja.mjs",
     "fonts:ja": "node scripts/build-fonts-ja.mjs",

@@ -19,6 +19,8 @@ export type ChartOptions = {
   axes?: boolean;
   /** draw the current value at the right edge */
   readout?: boolean;
+  /** low-cost mode: no glow under the moving-average line */
+  lite?: boolean;
   padding?: { top: number; right: number; bottom: number; left: number };
 };
 
@@ -118,8 +120,10 @@ export function drawChart(ctx: CanvasRenderingContext2D, opts: ChartOptions): vo
     ctx.strokeStyle = rgba(accent, 0.98);
     ctx.lineWidth = opts.axes ? 2.6 : 2;
     ctx.lineJoin = 'round';
-    ctx.shadowColor = rgba(accent, 0.55);
-    ctx.shadowBlur = 10;
+    if (!opts.lite) {
+      ctx.shadowColor = rgba(accent, 0.55);
+      ctx.shadowBlur = 10;
+    }
     ctx.stroke();
     ctx.shadowBlur = 0;
 

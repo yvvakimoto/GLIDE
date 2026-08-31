@@ -13,6 +13,7 @@ import type { Summary } from '../core/stats';
 import { drawChart } from '../render/chart';
 import { boardMetrics, drawKeyboard } from '../render/keyboard';
 import { rgba, speedRgb } from '../render/color';
+import { renderScale } from '../render/quality';
 import { el } from './dom';
 
 export type SummaryContext = {
@@ -25,9 +26,12 @@ export type SummaryContext = {
 
 type HeatMode = 'errors' | 'speed';
 
-function fitCanvas(canvas: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; w: number; h: number } | undefined {
+function fitCanvas(
+  canvas: HTMLCanvasElement,
+  lite: boolean,
+): { ctx: CanvasRenderingContext2D; w: number; h: number } | undefined {
   const rect = canvas.getBoundingClientRect();
-  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  const dpr = renderScale(lite);
   const w = Math.max(1, Math.round(rect.width));
   const h = Math.max(1, Math.round(rect.height));
   canvas.width = Math.round(w * dpr);
@@ -71,6 +75,7 @@ const card = (label: string, value: string, unit?: string): HTMLElement =>
 
 export function renderSummary(ctx: SummaryContext): void {
   const { summary, settings } = ctx;
+  const lite = settings.graphics === 'lite';
   const heroColor = rgba(speedRgb(summary.wpm), 1);
   const seconds = summary.durationMs / 1000;
 
@@ -79,7 +84,7 @@ export function renderSummary(ctx: SummaryContext): void {
   let heatMode: HeatMode = 'errors';
 
   const drawHeat = (): void => {
-    const fit = fitCanvas(heatCanvas);
+    const fit = fitCanvas(heatCanvas, lite);
     if (!fit) return;
     fit.ctx.clearRect(0, 0, fit.w, fit.h);
     drawKeyboard(fit.ctx, boardMetrics(fit.w, fit.h), {
@@ -87,12 +92,13 @@ export function renderSummary(ctx: SummaryContext): void {
       labels: keyLabels(ctx.spec, settings.labelMode === 'blank' ? 'layout' : settings.labelMode),
       fingerColors: false,
       now: 0,
+      lite,
       heat: heatMap(summary, heatMode),
     });
   };
 
   const drawSpeed = (): void => {
-    const fit = fitCanvas(chartCanvas);
+    const fit = fitCanvas(chartCanvas, lite);
     if (!fit) return;
     fit.ctx.clearRect(0, 0, fit.w, fit.h);
     drawChart(fit.ctx, {
@@ -102,6 +108,7 @@ export function renderSummary(ctx: SummaryContext): void {
       xMax: Math.max(5, seconds),
       maWindow: settings.maWindow,
       axes: true,
+      lite,
     });
   };
 

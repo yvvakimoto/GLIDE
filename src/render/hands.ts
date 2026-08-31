@@ -39,6 +39,8 @@ export type HandsOptions = {
   fingerColors: boolean;
   now: number;
   opacity: number;
+  /** low-cost mode: no aura wash, no shadow blur on the lit digits */
+  lite?: boolean;
 };
 
 type Digit = { finger: Finger; x: number; tipY: number; w: number };
@@ -84,6 +86,39 @@ const MONO = `'JetBrains Mono', ui-monospace, monospace`;
  * name and would not care, but "is this the hand that acts now" is read off the
  * whole map, and with the other side's cues left in, both hands answer yes.
  */
+/**
+ * The aura wash, memoised on the beat.
+ *
+ * It is a radial gradient evaluated over the whole hand box — a few hundred
+ * device pixels square — and `beat` moves every frame, so it was a fresh shader
+ * per hand per frame. Sixteen steps of the pulse are more than the eye resolves
+ * over a 680 ms cycle, and they turn the gradient into a cache hit.
+ */
+const AURA_STEPS = 16;
+let auraKey = '';
+let auraValue: CanvasGradient | undefined;
+function auraFor(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  accent: RGB,
+  beat: number,
+  op: number,
+): CanvasGradient {
+  const step = Math.round(beat * AURA_STEPS) / AURA_STEPS;
+  const key = `${cx}|${cy}|${radius}|${accent[0]},${accent[1]},${accent[2]}|${step}|${op.toFixed(3)}`;
+  if (key !== auraKey || !auraValue) {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    g.addColorStop(0, rgba(accent, (0.1 + 0.3 * step) * op));
+    g.addColorStop(0.55, rgba(accent, (0.04 + 0.15 * step) * op));
+    g.addColorStop(1, rgba(accent, 0));
+    auraKey = key;
+    auraValue = g;
+  }
+  return auraValue;
+}
+
 function cueIndex(cues: readonly HandCue[], side: 'left' | 'right'): Map<Finger, { at: number; cue: HandCue }> {
   const map = new Map<Finger, { at: number; cue: HandCue }>();
   const initial = side === 'left' ? 'l' : 'r';
@@ -102,6 +137,8 @@ export function drawHand(
   box: Box,
   side: 'left' | 'right',
   opts: HandsOptions,
+  /** longest cue index across both hands, so the two rank their digits alike */
+  total = Math.max(1, ...opts.cues.map((c) => c.at + 1)),
 ): void {
   if (opts.opacity <= 0.01) return;
 
@@ -117,7 +154,6 @@ export function drawHand(
   const py = (my: number) => oy + my * h;
 
   const cues = cueIndex(opts.cues, side);
-  const total = Math.max(1, ...opts.cues.map((c) => c.at + 1));
   const fingerOf = (digit: Digit): Finger =>
     side === 'left' ? (LEFT_OF[digit.finger] ?? digit.finger) : digit.finger;
 
@@ -148,12 +184,8 @@ export function drawHand(
   // the aura: a soft wash over the whole hand, and the largest part of the
   // left-or-right signal. Drawn untransformed so the glow does not breathe with
   // the hand and double the motion.
-  if (active) {
-    const aura = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.62);
-    aura.addColorStop(0, rgba(accent, (0.1 + 0.3 * beat) * op));
-    aura.addColorStop(0.55, rgba(accent, (0.04 + 0.15 * beat) * op));
-    aura.addColorStop(1, rgba(accent, 0));
-    ctx.fillStyle = aura;
+  if (active && !opts.lite) {
+    ctx.fillStyle = auraFor(ctx, cx, cy, Math.max(w, h) * 0.62, accent, beat, op);
     ctx.fillRect(box.x, box.y, box.w, box.h);
   }
 
@@ -212,8 +244,10 @@ export function drawHand(
 
     if (lit) {
       ctx.save();
-      ctx.shadowColor = rgba(color, (now ? 0.85 : 0.4) * op);
-      ctx.shadowBlur = width * (now ? 1.5 : 0.7);
+      if (!opts.lite) {
+        ctx.shadowColor = rgba(color, (now ? 0.85 : 0.4) * op);
+        ctx.shadowBlur = width * (now ? 1.5 : 0.7);
+      }
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
@@ -312,6 +346,7 @@ export function drawHands(
   right: Box,
   opts: HandsOptions,
 ): void {
-  drawHand(ctx, left, 'left', opts);
-  drawHand(ctx, right, 'right', opts);
+  const total = Math.max(1, ...opts.cues.map((c) => c.at + 1));
+  drawHand(ctx, left, 'left', opts, total);
+  drawHand(ctx, right, 'right', opts, total);
 }

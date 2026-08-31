@@ -291,6 +291,18 @@ export function renderSettingsPanel(opts: SettingsPanelOptions): void {
         ),
       ),
       row(
+        'graphics',
+        'lite drops the background glow, the frosted panels and the soft shadows, and renders at a lower resolution',
+        segmented(
+          [
+            { value: 'full' as const, label: 'full' },
+            { value: 'lite' as const, label: 'lite', sub: 'if the fan spins up' },
+          ],
+          s.graphics,
+          (graphics) => set({ graphics }),
+        ),
+      ),
+      row(
         'keypress sound',
         'a short synthesised click, quiet by default',
         segmented(
