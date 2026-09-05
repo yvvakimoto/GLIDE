@@ -65,6 +65,28 @@ const WORKS = [
   { id: 64317, title: 'The Great Gatsby', author: 'F. Scott Fitzgerald', chapters: 9 },
   { id: 2542, title: "A Doll's House", author: 'Henrik Ibsen', chapters: 3 },
   { id: 35, title: 'The Time Machine', author: 'H. G. Wells', chapters: 16 },
+  { id: 2701, title: 'Moby Dick', author: 'Herman Melville', chapters: 135 },
+
+  /*
+   * Eastern works, on the same public-domain basis as the rest: US public domain
+   * via Project Gutenberg. Translators are credited where the edition names one,
+   * because for a translated work the translator wrote these sentences.
+   *
+   * Several have a chapter count of 1. That is not a failure and not data loss --
+   * the whole text is there and the bookmark still works paragraph by paragraph.
+   * Their editions head sections with titles rather than numbers, and the titled
+   * fallback only fires when it can find two it trusts. A coarse contents list is
+   * the honest outcome; a confident wrong one would not be.
+   */
+  { id: 7164, title: 'Gitanjali', author: 'Rabindranath Tagore', chapters: 103 },
+  { id: 216, title: 'The Tao Teh King', author: 'Laozi, tr. James Legge', chapters: 5 },
+  { id: 3330, title: 'The Analects of Confucius', author: 'Confucius, tr. James Legge', chapters: 19 },
+  { id: 12096, title: 'Bushido, the Soul of Japan', author: 'Inazo Nitobe', chapters: 4 },
+  { id: 769, title: 'The Book of Tea', author: 'Kakuzo Okakura', chapters: 1 },
+  { id: 1210, title: 'Kwaidan', author: 'Lafcadio Hearn', chapters: 1 },
+  { id: 4018, title: 'Japanese Fairy Tales', author: 'Yei Theodora Ozaki', chapters: 16 },
+  { id: 246, title: 'The Rubaiyat of Omar Khayyam', author: 'Omar Khayyam, tr. Edward FitzGerald', chapters: 1 },
+  { id: 8130, title: 'Glimpses of Unfamiliar Japan', author: 'Lafcadio Hearn', chapters: 1 },
 ];
 
 /*
@@ -146,13 +168,29 @@ function paragraphsOf(body) {
 function headingOf(block) {
   const lines = block.split('\n').map((line) => line.trim()).filter(Boolean);
   if (!lines.length || lines.length > 3) return null;
-  if (lines.some((line) => line.length > 60)) return null;
+  // 72 rather than a rounder 60: five of Moby Dick's chapter titles run to 68
+  // characters, and a heading still has to start with a heading word, survive
+  // monotonicity and have prose under it, so the ceiling is not what is doing
+  // the work here.
+  if (lines.some((line) => line.length > 72)) return null;
 
   const first = lines[0];
   const title = applyReplacements(lines.join(' - ')).replace(/\s+/g, ' ');
 
   if (HEADING_WORD.test(first) || ROMAN_ONLY.test(first) || ARABIC_ONLY.test(first)) {
     return { title, n: numberOf(first), division: DIVISION_WORD.test(first) };
+  }
+
+  /*
+   * A titled heading: a short line in capitals, two or more words, not ending
+   * like a sentence. Only ever used as a fallback, because this is the loose end
+   * of the detector — real prose in small caps or a shouted line of dialogue can
+   * match it, which is why numbered headings always win and why the per-work
+   * chapter count stays an assertion.
+   */
+  if (lines.length === 1 && /^[A-Z][A-Z0-9 '(),.:;!?-]+$/.test(first) && !/[.,;:]$/.test(first)) {
+    const words = first.trim().split(/\s+/);
+    if (words.length >= 2 && words.length <= 9) return { title, n: null, division: false, titled: true };
   }
   return null;
 }
@@ -226,9 +264,12 @@ function buildWork(meta, raw) {
   const blocks = paragraphsOf(body);
 
   const candidates = [];
+  const titled = [];
   for (const [index, block] of blocks.entries()) {
     const heading = headingOf(block);
-    if (heading && heading.n !== null) candidates.push({ ...heading, index });
+    if (!heading) continue;
+    if (heading.n !== null) candidates.push({ ...heading, index });
+    else if (heading.titled) titled.push({ ...heading, index });
   }
 
   /*
@@ -237,22 +278,59 @@ function buildWork(meta, raw) {
    * Find the Books first, then run the monotonic filter *within* each — which is
    * also what removes each Book's own table-of-contents copy.
    */
-  const divisions = longestIncreasing(candidates.filter((c) => c.division));
-  const chapterCandidates = candidates.filter((c) => !c.division);
+  /*
+   * Drop the table of contents, structurally rather than positionally.
+   *
+   * A contents page is headings with nothing between them; the body is headings
+   * separated by prose. So a candidate whose very next block is also a candidate
+   * is a contents entry, and the whole listing falls away without anyone having
+   * to know where in the file it sits.
+   *
+   * Monotonicity alone does not do this. The contents numbers and the body
+   * numbers both ascend, so the longest increasing run happily takes the first
+   * half of one and the second half of the other — which is how Moby Dick found
+   * 130 perfectly good headings and produced five chapters with any text in
+   * them, the rest being the empty gaps between contents lines.
+   */
+  const isCandidate = new Set(candidates.map((c) => c.index));
+  const titledAt = new Set(titled.map((c) => c.index));
+  const bodyCandidates = candidates.filter((c) => !isCandidate.has(c.index + 1));
 
-  let headings;
+  const divisions = longestIncreasing(bodyCandidates.filter((c) => c.division));
+  const chapterCandidates = bodyCandidates.filter((c) => !c.division);
+
+  /*
+   * Two readings of the structure, and the one that explains more of the book
+   * wins.
+   *
+   * Segmenting by Book is what rescues a novel whose chapter numbers restart in
+   * each part. But "BOOK I." also turns up *inside* a chapter — Moby Dick's
+   * cetology chapter is built out of them — and taking those as the top level
+   * then hunts for chapters only within one chapter, finding almost none. Rather
+   * than trying to tell the two apart by shape, build both and compare: a false
+   * division set covers a sliver of the text and loses badly.
+   */
+  const flat = longestIncreasing(chapterCandidates);
+
+  let nested = [];
   if (divisions.length >= 2) {
-    headings = [];
     for (const [i, division] of divisions.entries()) {
       const until = i + 1 < divisions.length ? divisions[i + 1].index : Infinity;
       const within = chapterCandidates.filter((c) => c.index > division.index && c.index < until);
       const kept = longestIncreasing(within);
-      // the Book heading itself opens the first chapter under it
-      headings.push(...kept.map((c) => ({ ...c, title: `${division.title} - ${c.title}` })));
+      nested.push(...kept.map((c) => ({ ...c, title: `${division.title} - ${c.title}` })));
     }
-    if (headings.length < divisions.length) headings = divisions;
-  } else {
-    headings = longestIncreasing(chapterCandidates);
+    if (nested.length < divisions.length) nested = divisions;
+  }
+
+  let headings = nested.length > flat.length ? nested : flat;
+
+  if (headings.length < 2 && titled.length >= 2) {
+    // Numbering found nothing, so fall back to titled headings. The contents
+    // rule applies here too, and position stands in for the number, which is
+    // what keeps them all rather than collapsing to a longest run of one.
+    const bodyTitled = titled.filter((c) => !isCandidate.has(c.index + 1) && !titledAt.has(c.index + 1));
+    headings = bodyTitled.map((c, i) => ({ ...c, n: i + 1 }));
   }
 
   if (REPORT) {
@@ -260,9 +338,29 @@ function buildWork(meta, raw) {
     for (const h of headings.slice(0, 4)) console.log(`    #${h.n} ${h.title}`);
   }
 
+  /*
+   * Everything before the first heading is front matter and is dropped. That is
+   * right for a title page and a preface, and catastrophic if the first heading
+   * was detected late: Kwaidan matched its first heading two thirds of the way
+   * in and silently shipped a third of the book.
+   *
+   * So measure what dropping would cost. Past a modest share of the text, the
+   * headings are not the book's structure and the honest answer is one chapter
+   * with everything in it.
+   */
+  const blockChars = blocks.map((b) => b.length);
+  const bodyChars = blockChars.reduce((n, c) => n + c, 0);
+  const wouldDrop = headings.length
+    ? blockChars.slice(0, headings[0].index).reduce((n, c) => n + c, 0)
+    : 0;
+  // 35%: a real preface can be a sixth of a slim volume — Yeats's introduction to
+  // Gitanjali is 18% of it and dropping it is correct — while a mis-detection
+  // lands far higher; Kwaidan's first match was 66% in.
+  const frontMatterTooBig = bodyChars > 0 && wouldDrop / bodyChars > 0.35;
+
   // A bad split is worse than no split, so fall back to the whole work.
   const sections =
-    headings.length >= 2
+    headings.length >= 2 && !frontMatterTooBig
       ? headings.map((h, i) => ({
           title: h.title,
           from: h.index + 1,
@@ -270,7 +368,12 @@ function buildWork(meta, raw) {
         }))
       : [{ title: '(whole work)', from: 0, to: blocks.length }];
 
-  const skipped = headings.length >= 2 ? headings[0].index : 0;
+  const skipped = headings.length >= 2 && !frontMatterTooBig ? headings[0].index : 0;
+  if (frontMatterTooBig) {
+    console.warn(
+      `  headings ignored: the first is ${Math.round((wouldDrop / bodyChars) * 100)}% into the text`,
+    );
+  }
 
   const chunks = [];
   const chapters = [];

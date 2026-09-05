@@ -279,10 +279,23 @@ nothing about rendering.
   --exit-code src/corpus/works`.
 - **Each 写経 work asserts its own chapter count**, in the spirit of the
   death-year check. Gutenberg re-issues editions, and one that changed heading
-  style would otherwise ship a single giant chapter in silence. Six books are
-  listed in `build-shakyo.mjs` as deliberately absent with the reason. Adding one
-  means teaching the detector its shape and *then* pinning the count — never
-  relaxing the assertion until it passes.
+  style would otherwise ship a single giant chapter in silence. Books that cannot
+  be split are listed in `build-shakyo.mjs` as deliberately absent, with the
+  reason. Adding one means teaching the detector its shape and *then* pinning the
+  count — never relaxing the assertion until it passes.
+- **A contents page is headings with nothing between them.** That is how the
+  table of contents is discarded, rather than by guessing where in the file it
+  sits: monotonicity alone cannot do it, because the contents numbers and the
+  body numbers both ascend, so the longest increasing run happily takes half of
+  each. Moby Dick found 130 perfectly good headings that way and produced five
+  chapters with any text in them.
+- **Front matter is dropped, so a late first heading is dangerous.** Everything
+  before the first heading goes, which is right for a title page and fatal for a
+  mis-detection — Kwaidan matched its first heading 66% of the way in and would
+  have shipped a third of the book. Past 35% of the text the headings are not the
+  structure and the build keeps everything as one chapter instead. A real preface
+  can be a sixth of a slim volume (Yeats's introduction to Gitanjali is 18%), so
+  the threshold has to sit well above that.
 - **Japanese 写経 is blocked on the editions, and it is measured, not assumed.**
   Of 358 cached 青空文庫 works over 2000 characters, **five** are fully
   ruby-annotated. The all-kana corpus works because it cherry-picks the rare
