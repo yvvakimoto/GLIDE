@@ -314,6 +314,18 @@ export function renderSettingsPanel(opts: SettingsPanelOptions): void {
           (sound) => set({ sound }),
         ),
       ),
+      row(
+        'background music',
+        'a quiet loop, playing the whole time rather than only during a run',
+        segmented(
+          [
+            { value: true, label: 'on' },
+            { value: false, label: 'off' },
+          ],
+          s.music,
+          (music) => set({ music }),
+        ),
+      ),
     ]),
 
     el('div', { class: 'settings-foot' }, [
