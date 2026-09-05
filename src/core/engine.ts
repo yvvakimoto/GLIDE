@@ -11,7 +11,7 @@
  * frame and react to the callbacks.
  */
 
-import { createStream, sourceScript, type Attribution, type TextStream } from './corpus';
+import { createStream, sourceScript, type Attribution, type Passage, type TextStream } from './corpus';
 import { handOf, keySide, physKey, type Finger } from './keyboard-geometry';
 import { InputRouter, type Press } from './input';
 import type { InputEvent } from './input';
@@ -33,7 +33,11 @@ export type Phase = 'idle' | 'countin' | 'running' | 'finished';
 export const CharState = { Pending: 0, Correct: 1, Error: 2, Fixed: 3 } as const;
 export type CharState = (typeof CharState)[keyof typeof CharState];
 
-export type EndReason = 'time' | 'quit' | null;
+/**
+ * How a run ended. 'end' is an ordered source running out — a work finished,
+ * rather than a clock or a keypress finishing it.
+ */
+export type EndReason = 'time' | 'quit' | 'end' | null;
 
 export type KeystrokeEvent = {
   index: number;
@@ -83,7 +87,7 @@ const COUNT_IN_STEPS = 3;
 /** keep this much text queued ahead of the cursor */
 const BUFFER_AHEAD = 700;
 
-type Segment = { start: number; end: number; attribution: Attribution };
+type Segment = { start: number; end: number; attribution: Attribution; at?: Passage['at'] };
 
 export class Runner {
   phase: Phase = 'idle';
@@ -97,6 +101,8 @@ export class Runner {
   blocked = false;
   /** the character the last wrong press produced, for the flash and the report */
   mistyped: string | undefined;
+  /** true once an ordered source has no more text to give */
+  exhausted = false;
 
   onPhase?: (phase: Phase, previous: Phase) => void;
   onKeystroke?: (event: KeystrokeEvent) => void;
@@ -107,6 +113,13 @@ export class Runner {
   private router: InputRouter;
   private stream: TextStream;
   private segments: Segment[] = [];
+  /**
+   * Where the last segment lookup landed. `attribution` used to rescan the list
+   * from the front every frame, which is fine for a one-minute sprint and not
+   * for a work typed straight through, where the buffer grows all session and
+   * `mark` would scan it a second time.
+   */
+  private segAt = 0;
   private units: Unit[] = [];
   private unitIndex = 0;
   private typed: Chord[] = [];
@@ -172,6 +185,8 @@ export class Runner {
     this.blocked = false;
     this.mistyped = undefined;
     this.endReason = null;
+    this.exhausted = false;
+    this.segAt = 0;
     this.router.reset();
     this.stats = new Stats(this.settings.maWindow);
     this.fill();
@@ -206,9 +221,9 @@ export class Runner {
     this.setPhase('finished');
   }
 
-  private complete(now: number): void {
+  private complete(now: number, reason: Exclude<EndReason, null> = 'time'): void {
     this.runEndedAt = now;
-    this.endReason = 'time';
+    this.endReason = reason;
     this.setPhase('finished');
   }
 
@@ -257,18 +272,55 @@ export class Runner {
     return Math.max(0, limit - this.elapsedMs);
   }
 
-  /** 0..1 through the time limit, or through the buffered text when untimed. */
+  /** 0..1 through the time limit, or through the work when there is no limit. */
   get progress(): number {
     const limit = this.settings.duration * 1000;
     if (limit > 0) return Math.min(1, this.elapsedMs / limit);
-    return this.text.length ? this.cursor / this.text.length : 0;
+    // `cursor / text.length` sawtooths on an endless source, because `fill`
+    // extends the denominator as fast as typing moves the numerator. An ordered
+    // work does have an end, and that is the number worth showing.
+    const mark = this.mark;
+    return mark ? Math.min(1, mark.chars / Math.max(1, mark.total)) : 0;
+  }
+
+  /**
+   * The segment holding the cursor. The cursor only moves backwards on a
+   * backspace, so walking from where the last lookup landed is O(1) in practice.
+   */
+  private segment(): Segment | undefined {
+    while (this.segAt > 0 && this.cursor < this.segments[this.segAt]!.start) this.segAt--;
+    while (this.segAt < this.segments.length - 1 && this.cursor >= this.segments[this.segAt]!.end) {
+      this.segAt++;
+    }
+    return this.segments[this.segAt];
   }
 
   get attribution(): Attribution | undefined {
-    for (const seg of this.segments) {
-      if (this.cursor < seg.end) return seg.attribution;
-    }
-    return this.segments[this.segments.length - 1]?.attribution;
+    return this.segment()?.attribution;
+  }
+
+  /**
+   * Ordered sources only: where the cursor sits in the work. `offset` is
+   * characters into the current chunk, so a bookmark can round it down to the
+   * chunk boundary — the only offset a builder guarantees is a unit boundary.
+   */
+  get mark(): { chunk: number; offset: number; chars: number; total: number } | undefined {
+    const total = this.stream.total;
+    if (total === undefined) return undefined;
+    const seg = this.segment();
+    if (!seg?.at) return undefined;
+    const offset = this.cursor - seg.start;
+    return { chunk: seg.at.chunk, offset, chars: seg.at.chars + offset, total };
+  }
+
+  /**
+   * Ordered sources: rebuild the buffer starting at `chunk`. A shuffle has no
+   * seek, so this is a plain reset for one — deliberately, because re-shuffling
+   * the bag on every restart is the thing the bag exists to avoid.
+   */
+  seek(chunk: number): void {
+    this.stream.seek?.(chunk);
+    this.reset();
   }
 
   /**
@@ -501,6 +553,13 @@ export class Runner {
     this.unitIndex++;
     this.fill();
     this.enterUnit();
+    // The work ran out. `enterUnit` empties `viable` and parks the cursor at the
+    // end of the text without touching the phase, so without this the runner sits
+    // in `running` for ever with every key dead and the clock still going.
+    // The phase test matters: `reset` runs this same pair while idle.
+    if (this.exhausted && this.unitIndex >= this.units.length && this.phase === 'running') {
+      this.complete(this.now, 'end');
+    }
   }
 
   /** Prepares matching state for the unit at `unitIndex`, stepping over untypeable ones. */
@@ -583,11 +642,17 @@ export class Runner {
     let appended = false;
     while (this.text.length - this.cursor < BUFFER_AHEAD) {
       const passage = this.stream.next();
+      // An ordered work has reached its end. This is the only way a stream can
+      // say so, and without it the loop spins for ever on one with nothing left.
+      if (!passage) {
+        this.exhausted = true;
+        break;
+      }
       const start = this.text.length;
       this.text += passage.text;
       for (let i = start; i < this.text.length; i++) this.states.push(CharState.Pending);
       this.units.push(...buildUnits(passage.text, start, this.spec));
-      this.segments.push({ start, end: this.text.length, attribution: passage.attribution });
+      this.segments.push({ start, end: this.text.length, attribution: passage.attribution, at: passage.at });
       appended = true;
     }
     if (appended) this.onTextChange?.();

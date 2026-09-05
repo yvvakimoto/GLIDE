@@ -19,8 +19,9 @@ import jaDrillData from '../corpus/ja-drills.json';
 import { getLayout, type LayoutId } from './layouts';
 import { physKey, type Finger } from './keyboard-geometry';
 import type { Script } from './method';
+import { getLoadedWork, isWorkId, listWorks, type Work } from './works';
 
-export type SourceKind = 'prose' | 'code' | 'drill';
+export type SourceKind = 'prose' | 'code' | 'drill' | 'work';
 
 export type SourceOption = {
   id: string;
@@ -40,13 +41,26 @@ export type Attribution = {
 export type Passage = {
   text: string;
   attribution: Attribution;
+  /** ordered sources only: where this passage sits in the work */
+  at?: { chunk: number; chars: number };
 };
 
 export type TextStream = {
   id: string;
   label: string;
   script: Script;
-  next(): Passage;
+  /** characters in the whole work; undefined for an endless source */
+  readonly total?: number;
+  /**
+   * The next passage, or null once an ordered source has run out.
+   *
+   * The null is not decoration. `Runner.fill` tops up with
+   * `while (text.length - cursor < BUFFER_AHEAD)`, so a stream with nothing left
+   * to give has to be able to say so or the loop never ends.
+   */
+  next(): Passage | null;
+  /** ordered sources only: restart emission at `chunk` */
+  seek?(chunk: number): void;
 };
 
 type Book = {
@@ -138,6 +152,14 @@ export function listSources(): SourceOption[] {
       kind: 'drill',
       script: 'ja',
       group: 'Japanese (all kana)',
+    })),
+    ...listWorks().map((w): SourceOption => ({
+      id: w.id,
+      label: w.title,
+      sublabel: w.author,
+      kind: 'work',
+      script: w.script,
+      group: w.script === 'ja' ? '写経 (日本語)' : '写経 (English)',
     })),
     ...DRILLS.map((d): SourceOption => ({
       id: d.id,
@@ -300,6 +322,35 @@ function makeJaDrill(id: string): TextStream {
   return { id, label: meta.label, script: 'ja', next: () => ({ text: nextText(), attribution }) };
 }
 
+/**
+ * A work, in order, once. `next()` returns null at the end rather than looping,
+ * which is what lets the runner notice the work is finished.
+ */
+function makeWorkStream(work: Work): TextStream {
+  let chunk = 0;
+  const attribution: Attribution = {
+    title: work.title,
+    author: work.author,
+    ...(work.url ? { url: work.url } : {}),
+  };
+  return {
+    id: work.id,
+    label: work.title,
+    script: work.script,
+    total: work.chars,
+    seek: (n) => {
+      chunk = Math.min(Math.max(0, Math.floor(n)), work.chunks.length);
+    },
+    next: () => {
+      const entry = work.chunks[chunk];
+      if (!entry) return null;
+      const at = { chunk, chars: work.offsets[chunk] ?? 0 };
+      chunk++;
+      return { text: entry.t, attribution, at };
+    },
+  };
+}
+
 function makePassageStream(
   id: string,
   label: string,
@@ -325,7 +376,21 @@ function makePassageStream(
 }
 
 /** Creates the passage stream for a source id; unknown ids fall back to mixed prose. */
+/** Where a work's source id falls back to while its body is still on the way. */
+export function fallbackFor(sourceId: string): string {
+  return sourceScript(sourceId) === 'ja' ? 'ja' : 'prose';
+}
+
 export function createStream(sourceId: string, layout: LayoutId): TextStream {
+  if (isWorkId(sourceId)) {
+    const work = getLoadedWork(sourceId);
+    if (work) return makeWorkStream(work);
+    // Nothing switches `source` to a work before its body has landed, so this is
+    // only reachable from a setting stored by a previous session. Serve the
+    // matching shuffle meanwhile — matching, because the spec's script comes from
+    // the source id, and latin text under a kana spec types nothing.
+    return createStream(fallbackFor(sourceId), layout);
+  }
   if (sourceId.startsWith('ja-drill-')) return makeJaDrill(sourceId);
   if (sourceId.startsWith('drill-')) return makeLatinDrill(sourceId, layout);
 
@@ -373,6 +438,9 @@ export function corpusCharset(script: Script): Set<string> {
   const add = (text: string) => {
     for (const ch of text) set.add(ch);
   };
+  for (const w of listWorks()) {
+    if (w.script === script) add(w.charset);
+  }
   if (script === 'ja') {
     for (const a of JA_AUTHORS) a.passages.forEach(add);
     jaDrillData.words.forEach(add);

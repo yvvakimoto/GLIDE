@@ -11,37 +11,15 @@ import {
 } from '../src/core/history';
 import { DEFAULT_SETTINGS, type Settings } from '../src/core/settings';
 import type { Summary } from '../src/core/stats';
+import { installStorage, type MemoryStorage } from './memory-storage';
 
 /** The key history.ts writes. Spelled out here so a rename has to be deliberate. */
 const KEY = 'dvorak-trainer/history/v1';
 
-class MemoryStorage implements Storage {
-  private map = new Map<string, string>();
-  get length(): number {
-    return this.map.size;
-  }
-  clear(): void {
-    this.map.clear();
-  }
-  getItem(key: string): string | null {
-    return this.map.get(key) ?? null;
-  }
-  key(index: number): string | null {
-    return [...this.map.keys()][index] ?? null;
-  }
-  removeItem(key: string): void {
-    this.map.delete(key);
-  }
-  setItem(key: string, value: string): void {
-    this.map.set(key, value);
-  }
-}
-
 let store: MemoryStorage;
 
 beforeEach(() => {
-  store = new MemoryStorage();
-  Object.defineProperty(globalThis, 'localStorage', { value: store, configurable: true, writable: true });
+  store = installStorage();
 });
 
 const summaryOf = (over: Partial<Summary> = {}): Summary => ({

@@ -5,6 +5,18 @@ import { romajiUnits, toHiragana } from '../src/core/kana';
 import { KANA_LAYOUTS, kanaFor, kanaIndex, type KanaLayoutId } from '../src/core/kana-layouts';
 import { buildUnits, methodKind, type MethodSpec } from '../src/core/method';
 
+/**
+ * `next()` returns null only when an ordered work runs out. Every source here is
+ * endless, so a null is a bug worth failing on rather than a `!` worth writing.
+ */
+type Stream = ReturnType<typeof createStream>;
+const nextOf = (stream: Stream) => {
+  const passage = stream.next();
+  if (!passage) throw new Error(`${stream.id} ran out, but only an ordered work does that`);
+  return passage;
+};
+
+
 const THUMBS = { left: 'NonConvert', right: 'Convert' };
 const spec = (ja: MethodSpec['ja']): MethodSpec => ({ script: 'ja', latin: 'qwerty', ja, thumbs: THUMBS });
 
@@ -177,7 +189,7 @@ describe('Japanese corpus', () => {
     for (const source of japanese) {
       const stream = createStream(source.id, 'qwerty');
       for (let i = 0; i < 8; i++) {
-        const passage = stream.next();
+        const passage = nextOf(stream);
         expect(passage.text.length, source.id).toBeGreaterThan(4);
         expect(kanaOnly.test(passage.text), `${source.id}: ${passage.text}`).toBe(true);
       }
@@ -186,7 +198,7 @@ describe('Japanese corpus', () => {
 
   it('does not pad Japanese passages with spaces', () => {
     const stream = createStream('ja', 'qwerty');
-    for (let i = 0; i < 10; i++) expect(stream.next().text).not.toContain(' ');
+    for (let i = 0; i < 10; i++) expect(nextOf(stream).text).not.toContain(' ');
   });
 });
 
