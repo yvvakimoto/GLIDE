@@ -136,6 +136,13 @@ let currentWorkId: string | undefined = storedWork;
 /** The chunk last written to the bookmark, so the per-frame check is a comparison. */
 let savedChunk = -1;
 let lastBookmarkAt = -Infinity;
+/**
+ * Whether this run has already been counted as a sitting. `saveMark('end')` runs
+ * wherever a run stops *and* again on pagehide, and the stats still hold the
+ * run's characters at that point — so without this, closing the tab after a run
+ * counts the same sitting twice and doubles the characters with it.
+ */
+let runCounted = false;
 let lastCountNumber = 0;
 let lastCountOut = 0;
 let finishedAt = -Infinity;
@@ -249,12 +256,13 @@ function saveMark(reason: 'tick' | 'end'): void {
     if (now - lastBookmarkAt < BOOKMARK_THROTTLE_MS) return;
   }
   const patch: Partial<Bookmark> = { chunk: mark.chunk, chars: mark.chars, stamp: work.stamp };
-  if (reason === 'end') {
-    const before = bookmarkOf(progress, work.id, work.stamp);
+  if (reason === 'end' && !runCounted) {
     const typed = runner.stats.producedChars;
     if (typed > 0) {
+      const before = bookmarkOf(progress, work.id, work.stamp);
       patch.typed = before.typed + typed;
       patch.sessions = before.sessions + 1;
+      runCounted = true;
     }
   }
   savedChunk = mark.chunk;
@@ -390,7 +398,10 @@ const endOf = (reason: EndReason): RunEnd =>
 
 runner.onPhase = (phase, previous) => {
   boardDirty = true;
-  if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) board.reset();
+  if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) {
+    board.reset();
+    runCounted = false;
+  }
   if (phase === 'finished') {
     finishedAt = performance.now();
     // Every ending routes through setPhase, so this one call covers the timer,

@@ -9,14 +9,18 @@
  * escapes so this file stays ASCII-clean on every platform.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(HERE, '..');
-const CACHE = join(HERE, '.cache');
+import {
+  LICENSE_NOTE,
+  ROOT,
+  TYPEABLE,
+  applyReplacements,
+  download,
+  stripGutenbergWrapper,
+} from './lib/gutenberg.mjs';
+
 const OUT = join(ROOT, 'src', 'corpus');
 const OFFLINE = process.argv.includes('--offline');
 
@@ -40,74 +44,8 @@ const PER_BOOK = 40;
 const MIN_LEN = 190;
 const MAX_LEN = 560;
 
-/** Characters a standard ANSI keyboard can produce. */
-const TYPEABLE = /^[A-Za-z0-9 !"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+$/;
-
-const REPLACEMENTS = [
-  [/[‘’‚‛′]/g, "'"],
-  [/[“”„‟″]/g, '"'],
-  [/[–—―]/g, '--'],
-  [/…/g, '...'],
-  [/[    ]/g, ' '],
-  [/[«»]/g, '"'],
-  [/æ/g, 'ae'],
-  [/œ/g, 'oe'],
-  [/[à-å]/g, 'a'],
-  [/[è-ë]/g, 'e'],
-  [/[ì-ï]/g, 'i'],
-  [/[ò-ö]/g, 'o'],
-  [/[ù-ü]/g, 'u'],
-  [/ç/g, 'c'],
-  [/ñ/g, 'n'],
-  [/[À-Å]/g, 'A'],
-  [/[È-Ë]/g, 'E'],
-  [/£/g, '$'],
-  [/[†‡§¶]/g, ''],
-  [/_/g, ''],
-];
-
-async function download(book) {
-  await mkdir(CACHE, { recursive: true });
-  const file = join(CACHE, `pg${book.id}.txt`);
-  if (existsSync(file)) return readFile(file, 'utf8');
-  if (OFFLINE) return null;
-
-  const urls = [
-    `https://www.gutenberg.org/cache/epub/${book.id}/pg${book.id}.txt`,
-    `https://www.gutenberg.org/files/${book.id}/${book.id}-0.txt`,
-  ];
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        headers: { 'User-Agent': 'dvorak-typing-trainer/0.1 (corpus builder)' },
-        signal: AbortSignal.timeout(45_000),
-      });
-      if (!res.ok) {
-        console.warn(`  ${res.status} ${url}`);
-        continue;
-      }
-      const text = await res.text();
-      await writeFile(file, text, 'utf8');
-      return text;
-    } catch (err) {
-      console.warn(`  ${url}: ${err.message}`);
-    }
-  }
-  return null;
-}
-
-function stripGutenbergWrapper(raw) {
-  const body0 = raw.replace(/\r\n/g, '\n');
-  const start = body0.search(/\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG EBOOK/i);
-  let body = start >= 0 ? body0.slice(body0.indexOf('\n', start) + 1) : body0;
-  const end = body.search(/\*\*\*\s*END OF (THE|THIS) PROJECT GUTENBERG EBOOK/i);
-  if (end >= 0) body = body.slice(0, end);
-  return body;
-}
-
 function normalise(text) {
-  let out = text;
-  for (const [pattern, to] of REPLACEMENTS) out = out.replace(pattern, to);
+  let out = applyReplacements(text);
   out = out.replace(/[ \t]+/g, ' ').trim();
   // drop a leading section marker: "XVII. ", "12. ", "3) "
   return out.replace(/^(?:[IVXLCDM]{1,7}|\d{1,3})\s*[.)]\s+(?=["'A-Z])/, '');
@@ -194,7 +132,7 @@ async function main() {
 
   for (const book of BOOKS) {
     console.log(book.title);
-    const raw = await download(book);
+    const raw = await download(book.id, OFFLINE);
     if (!raw) {
       console.warn('  skipped (unavailable)');
       continue;
@@ -221,15 +159,7 @@ async function main() {
   await writeFile(
     join(OUT, 'prose.json'),
     `${JSON.stringify(
-      {
-        // stripGutenbergWrapper() removes the Project Gutenberg License along
-        // with the header and footer, so the trademark must not ride along on
-        // what is left. These are public-domain texts *sourced from* Project
-        // Gutenberg; they are no longer Project Gutenberg eBooks.
-        license:
-          'Public domain. Texts sourced from Project Gutenberg, with its header, footer and licence removed; not distributed as Project Gutenberg eBooks.',
-        sources,
-      },
+      { license: LICENSE_NOTE, sources },
       null,
       1,
     )}\n`,
