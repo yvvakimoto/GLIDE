@@ -64,6 +64,17 @@ const PROSE = ['One fish. Two fish? Three fish! ', 'a paragraph that never ends 
 const SECOND = 10; // 'One fish. ' — the start of the second sentence
 const THIRD = 20; // 'One fish. Two fish? '
 
+/**
+ * A work longer than BUFFER_AHEAD, so the stream really is several chunks past
+ * the cursor while it is being typed. That gap is the whole subject of the
+ * reset tests: CHUNKS is drained by a single fill and cannot show it.
+ */
+const LONG = Array.from(
+  { length: 12 },
+  (_, i) => `${'abcdefghijkl'[i]} alpha beta gamma delta epsilon zeta eta theta iota. `.repeat(2),
+);
+const LONG_TEXT = LONG.join('');
+
 const settings = (patch: Partial<Settings> = {}): Settings => ({
   ...DEFAULT_SETTINGS,
   source: 'work/test',
@@ -254,6 +265,81 @@ describe('Runner on a work', () => {
     expect(runner.cursor).toBe(0);
     expect(runner.phase).toBe('idle');
     expect(runner.mark?.chunk).toBe(2);
+  });
+
+  it('reset rebuilds at the cursor, not at the stream', () => {
+    registerWork(makeWork(LONG, 'work/long'));
+    const long = new Runner(settings({ source: 'work/long' }));
+    let clock = 1000;
+    long.startNow(clock);
+    // the stream is genuinely ahead: that is the state reset used to rebuild from
+    expect(long.text.length).toBeGreaterThanOrEqual(700);
+    expect(long.exhausted).toBe(false);
+
+    for (let i = 0; i < 40; i++) {
+      long.handleKeydown(keyFor(s, long.text[long.cursor]!), (clock += 100));
+    }
+    const before = long.mark!;
+    expect(before.chars).toBe(40);
+
+    long.reset();
+    expect(long.phase).toBe('idle');
+    expect(long.cursor).toBe(0);
+    // the place is untouched by a reset, and the text under it is the text that
+    // was under it — not whatever the buffer had run on ahead to
+    expect(long.mark).toEqual(before);
+    expect(long.text.length).toBeGreaterThan(0);
+    expect(LONG_TEXT.slice(before.chars, before.chars + long.text.length)).toBe(long.text);
+  });
+
+  it('reset keeps the place even when the whole work was already buffered', () => {
+    for (let i = 0; i < 3; i++) typeExpected();
+    const before = runner.mark;
+    runner.reset();
+    expect(runner.text).toBe(WHOLE.slice(3));
+    expect(runner.mark).toEqual(before);
+  });
+
+  it('reset on a finished work leaves it finished, not a character short', () => {
+    for (let i = 0; i < WHOLE.length; i++) typeExpected();
+    runner.reset();
+    // the end of the work is the one place the offset is a whole chunk long,
+    // which the stream's own clamp would turn into the last character
+    expect(runner.text).toBe('');
+    expect(runner.exhausted).toBe(true);
+  });
+
+  it('a seek is not undone by the rewind inside reset', () => {
+    for (let i = 0; i < CHUNKS[0]!.length; i++) typeExpected();
+    runner.seek(2);
+    expect(runner.text).toBe(CHUNKS[2]);
+    expect(runner.mark?.chunk).toBe(2);
+    runner.seek(0);
+    expect(runner.text).toBe(WHOLE);
+    expect(runner.mark?.chunk).toBe(0);
+  });
+
+  it('a shuffle has nothing to rewind, and resets as it always did', () => {
+    const shuffle = new Runner(settings({ source: 'prose' }));
+    let clock = 1000;
+    shuffle.startNow(clock);
+    for (let i = 0; i < 5; i++) {
+      shuffle.handleKeydown(keyFor(s, shuffle.text[shuffle.cursor]!), (clock += 100));
+    }
+    expect(() => shuffle.reset()).not.toThrow();
+    expect(shuffle.mark).toBeUndefined();
+    expect(shuffle.text.length).toBeGreaterThan(0);
+  });
+
+  it('changing the source rebuilds from the top of the new work', () => {
+    registerWork(makeWork(PROSE, 'work/prose'));
+    for (let i = 0; i < CHUNKS[0]!.length + 2; i++) typeExpected();
+    // the place was measured in the stream being replaced, so a rebuild starts
+    // at the top and it is main.ts's job to put the reader back
+    expect(runner.configure(settings({ source: 'work/prose' }))).toBe(true);
+    expect(runner.text).toBe(PROSE.join(''));
+    expect(runner.mark?.chunk).toBe(0);
+    expect(runner.mark?.chars).toBe(0);
   });
 });
 

@@ -142,8 +142,13 @@ export class Runner {
     this.reset();
   }
 
-  /** Applies new settings; rebuilds the text if anything about the typing changed. */
-  configure(settings: Settings): void {
+  /**
+   * Applies new settings; rebuilds the text if anything about the typing
+   * changed, and says whether it did. A rebuild starts a *new* stream at the
+   * top, so a caller that knows where the reader was — main.ts, which owns the
+   * bookmark — has to put it back.
+   */
+  configure(settings: Settings): boolean {
     const before = this.spec;
     const next = specOf(settings);
     const rebuild =
@@ -158,8 +163,11 @@ export class Runner {
     this.stats.setMaWindow(settings.maWindow);
     if (rebuild) {
       this.stream = createStream(settings.source, settings.layout);
-      this.reset();
+      // A fresh stream starts at the top, and the place the cursor holds was
+      // measured in the stream this one replaces — so `stream`, not `cursor`.
+      this.rebuildFrom('stream');
     }
+    return rebuild;
   }
 
   get activeSettings(): Settings {
@@ -170,7 +178,30 @@ export class Runner {
     return this.spec;
   }
 
+  /**
+   * Rebuilds the buffer from the cursor's own place. An ordered stream is
+   * queued BUFFER_AHEAD characters past the cursor, so refilling without
+   * rewinding it starts the next run several paragraphs past the last one.
+   */
   reset(): void {
+    this.rebuildFrom('cursor');
+  }
+
+  /**
+   * `cursor` puts the stream back to where the typist actually got to;
+   * `stream` leaves it where it is, which is what a caller that has just
+   * pointed the stream somewhere itself wants.
+   */
+  private rebuildFrom(at: 'cursor' | 'stream'): void {
+    if (at === 'cursor') {
+      // read the place before wiping the state it is derived from
+      const here = this.mark;
+      // `chars === total` is the end of the work, where `offset` is the whole
+      // length of the last chunk: `seek` clamps that to `length - 1` and would
+      // hand the book's last character back. A finished work rebuilds to
+      // nothing, as it did before.
+      if (here && here.chars < here.total) this.stream.seek?.(here.chunk, here.offset);
+    }
     this.text = '';
     this.states = [];
     this.segments = [];
@@ -323,7 +354,9 @@ export class Runner {
    */
   seek(chunk: number, offset = 0): void {
     this.stream.seek?.(chunk, offset);
-    this.reset();
+    // `stream`, not `cursor`: rewinding to the cursor here would put the seek
+    // that was just asked for straight back.
+    this.rebuildFrom('stream');
   }
 
   /**
