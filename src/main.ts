@@ -183,8 +183,11 @@ function applySettings(patch: Partial<Settings>): void {
   settings = { ...settings, ...patch };
   saveSettings(settings);
   clicker.enabled = settings.sound;
-  runner.configure(settings);
-  if (sourceChanged) resumeBookmark();
+  // Changing the layout or the Japanese method rebuilds the text too, on a
+  // brand-new stream that starts at the top of the work — so the resume hangs
+  // off the rebuild, not off `source` having moved.
+  const rebuilt = runner.configure(settings);
+  if (sourceChanged || rebuilt) resumeBookmark();
   renderConfigChips(refs, settings, openSettings);
   if (panel === 'settings') renderPanel();
   if (panel === 'contents') renderContents();
@@ -263,6 +266,11 @@ async function selectWork(id: string): Promise<void> {
  * walk every BOOKMARK_THROTTLE_MS.
  */
 function saveMark(reason: 'tick' | 'end'): void {
+  // Only a run has a place worth writing. Outside one the mark is wherever the
+  // last reset or seek put it — the bookmark's own sentence start after Esc —
+  // and `pagehide` would otherwise write that back over the bookmark with no
+  // keystrokes behind it.
+  if (runner.phase !== 'running' && runner.phase !== 'finished') return;
   const work = activeWork();
   const mark = runner.mark;
   if (!work || !mark) return;
