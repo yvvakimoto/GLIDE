@@ -372,9 +372,92 @@ async function main() {
   await wait(250);
   const afterEscape = await page.evaluate(() => window.__glide.runner.phase);
 
+  // 写経: leaving the summary with esc has to land where tab lands. `reset`
+  // alone rebuilds the buffer from wherever the *stream* got to, which is up to
+  // BUFFER_AHEAD — several paragraphs — past the cursor, and the next tick then
+  // writes that over the bookmark. Unit tests reach the runner but not this
+  // sequence of keys, so it is pinned here. Last pass: it restores nothing, and
+  // it relies on the advance pass having already put the latin settings and the
+  // thumbs back so that Space means "start".
+  let shakyo = 'skipped: no work in the picker';
+  await page.evaluate(() => window.__glide.clearProgress());
+  await page.evaluate(() =>
+    window.__glide.applySettings({ errorMode: 'block', duration: 0, labelMode: 'layout' }),
+  );
+  await page.keyboard.press('c');
+  await wait(300);
+  const workId = await page.evaluate(
+    () => document.querySelector('option[value^="work/"]')?.value ?? null,
+  );
+  await page.keyboard.press('Escape');
+  await wait(250);
+
+  if (workId) {
+    // selectWork, never applySettings: the body has to land before `source`
+    // moves, or this silently gets the fallback shuffle instead of the work
+    await page.evaluate((id) => window.__glide.selectWork(id), workId);
+    await page.waitForFunction((id) => window.__glide.settings.source === id, workId, {
+      polling: 60,
+      timeout: 20_000,
+    });
+
+    // start a few paragraphs in: a work's first chunk can be one long sentence
+    // (Alice's is), and then every resume rounds back to zero and this pass
+    // stops saying anything about where a resume actually lands
+    await page.evaluate(() => window.__glide.seekChunk(5));
+    await wait(150);
+
+    await page.keyboard.press('Space');
+    await wait(1900);
+    const shakyoStart = await page.evaluate(() => window.__glide.runner.phase);
+    if (shakyoStart !== 'running') throw new Error(`shakyo pass did not start: ${shakyoStart}`);
+    for (let i = 0; i < 90; i++) {
+      if (!(await pressNext(page))) break;
+      await wait(35);
+    }
+
+    await page.keyboard.press('Escape'); // end the run: the summary comes up
+    await wait(900);
+    await shot('24-shakyo-summary');
+    const stopped = await page.evaluate(() => window.__glide.mark);
+
+    await page.keyboard.press('Escape'); // leave the summary
+    await wait(300);
+    const idleMark = await page.evaluate(() => window.__glide.mark);
+
+    // a hidden tab writes the place, and at idle that must not be somewhere new
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const stored = await page.evaluate(
+      (id) =>
+        JSON.parse(localStorage.getItem('dvorak-trainer/progress/v1') ?? '{}').works?.[id] ?? null,
+      workId,
+    );
+
+    await page.keyboard.press('Space'); // run again
+    await wait(1900);
+    const resumed = await page.evaluate(() => window.__glide.mark);
+    await shot('25-shakyo-resumed');
+
+    const ahead = resumed.chars - stopped.chars;
+    shakyo = JSON.stringify({ workId, stopped, idleMark, stored, resumed, ahead });
+    // a resume rounds *back* to the top of the sentence; it never starts ahead
+    if (ahead > 0) throw new Error(`esc then space started ${ahead} characters ahead: ${shakyo}`);
+    // and it rounds back inside the paragraph it stopped in, not to an earlier one
+    if (resumed.chunk !== stopped.chunk) {
+      throw new Error(`esc then space left the paragraph it stopped in: ${shakyo}`);
+    }
+    // esc's landing is where space then starts: one is the other
+    if (idleMark.chars !== resumed.chars) throw new Error(`space moved off the idle place: ${shakyo}`);
+    if (stored.chars > stopped.chars) throw new Error(`a hidden tab moved the place: ${shakyo}`);
+  }
+
   console.log('advance:', JSON.stringify({ beforeMiss, afterMiss }));
   console.log('timer  :', JSON.stringify(expired));
   console.log('summary:', JSON.stringify({ insideGuard, afterGuard, afterEscape }));
+  console.log('shakyo :', shakyo);
   console.log('typed:', typed.join(''));
   console.log('mid  :', JSON.stringify(mid));
   console.log('end  :', JSON.stringify(end));

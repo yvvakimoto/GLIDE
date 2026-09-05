@@ -183,8 +183,11 @@ function applySettings(patch: Partial<Settings>): void {
   settings = { ...settings, ...patch };
   saveSettings(settings);
   clicker.enabled = settings.sound;
-  runner.configure(settings);
-  if (sourceChanged) resumeBookmark();
+  // Changing the layout or the Japanese method rebuilds the text too, on a
+  // brand-new stream that starts at the top of the work — so the resume hangs
+  // off the rebuild, not off `source` having moved.
+  const rebuilt = runner.configure(settings);
+  if (sourceChanged || rebuilt) resumeBookmark();
   renderConfigChips(refs, settings, openSettings);
   if (panel === 'settings') renderPanel();
   if (panel === 'contents') renderContents();
@@ -263,6 +266,11 @@ async function selectWork(id: string): Promise<void> {
  * walk every BOOKMARK_THROTTLE_MS.
  */
 function saveMark(reason: 'tick' | 'end'): void {
+  // Only a run has a place worth writing. Outside one the mark is wherever the
+  // last reset or seek put it — the bookmark's own sentence start after Esc —
+  // and `pagehide` would otherwise write that back over the bookmark with no
+  // keystrokes behind it.
+  if (runner.phase !== 'running' && runner.phase !== 'finished') return;
   const work = activeWork();
   const mark = runner.mark;
   if (!work || !mark) return;
@@ -362,14 +370,25 @@ function renderContents(): void {
   });
 }
 
-/** Tab, from idle or from the summary. A work resumes; a shuffle starts over. */
-function restartRun(now: number): void {
+/**
+ * Puts the runner at the top of what is next to type: a work goes to its
+ * bookmark — the sentence it was left in, not the exact character — and a
+ * shuffle draws fresh text. Going through here is also what keeps `savedChunk`
+ * and `savedOffset` in step with where the runner actually is, which is what
+ * the tick gate compares against.
+ */
+function rewindRun(): void {
   const work = activeWork();
   if (work && settings.source === work.id) {
     seekToBookmark(work);
   } else {
     runner.reset();
   }
+}
+
+/** Tab, from idle or from the summary. A work resumes; a shuffle starts over. */
+function restartRun(now: number): void {
+  rewindRun();
   board.reset();
   runner.beginCountIn(now);
 }
@@ -478,16 +497,15 @@ window.addEventListener('keydown', (event) => {
     const guarded = now - finishedAt < SUMMARY_GUARD_MS;
     if (!isThumbKey && event.key === 'Escape') {
       event.preventDefault();
-      if (!guarded) runner.reset();
+      // The same place Tab lands, minus the count-in. Leaving the summary must
+      // put the runner back on the bookmark: whatever it is left showing is
+      // where the next run — and the next bookmark write — begin.
+      if (!guarded) rewindRun();
       return;
     }
     if (!isThumbKey && event.key === 'Tab') {
       event.preventDefault();
-      if (!guarded) {
-        // `reset` empties the buffer but leaves the stream where it stopped, so
-        // for a work it would skip the paragraph you did not finish.
-        restartRun(now);
-      }
+      if (!guarded) restartRun(now);
       return;
     }
     // The run just moved the bar, which is exactly when you want to see it. `c`
