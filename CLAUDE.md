@@ -450,7 +450,8 @@ nothing about rendering.
   the works build: 4.4 MB, and every re-encode adds another 4.4 MB to the
   repository's history for ever. MP3 and not Ogg because Safari cannot play
   Vorbis; 96 kbps stereo because the whole file is the price of the setting. The
-  master stays out of the repo — `.gitignore` names it — and the encode is
+  master is not in the repo at all, so keep a copy elsewhere before re-encoding
+  anything — the shipped file is already second-generation. The encode is
   `ffmpeg -c:a libmp3lame -b:a 96k -write_xing 1` with metadata stripped;
   `-write_xing` is load-bearing, because `el.duration` is what `loopAction`
   schedules against. No `-af`: the level constant in `music.ts` is the volume
