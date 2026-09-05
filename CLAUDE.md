@@ -278,6 +278,23 @@ nothing about rendering.
   the frame loop. Note that the end-of-run write happens *twice* (the run, then
   `pagehide`) with the stats still holding the run's characters, so a sitting is
   counted once by a flag, not by the write.
+- **`reset` rewinds the stream to the cursor; only `seek` and `configure` start
+  from the stream.** `fill` keeps `BUFFER_AHEAD` characters queued past the
+  cursor, and a work stream advances its chunk pointer inside `next()` — so it
+  is two to four paragraphs ahead of the typist in English and up to seventeen
+  in Japanese. `reset` used to leave it there and refill, which meant esc out of
+  the summary and the next run began several paragraphs past where the reader
+  stopped, and three seconds later `saveMark` wrote that over the bookmark;
+  merely hiding the tab was enough, because the idle mark already reported the
+  advanced place. So `rebuildFrom('cursor')` (`engine.ts`) reads `mark` *before*
+  wiping the state it derives from and seeks the stream back to it, and the two
+  callers that have just pointed the stream themselves — `seek`, and `configure`
+  when it swaps in a new stream — say `'stream'` instead. The engine rewinds to
+  the exact cursor because it cannot see the chunk text behind its own first
+  segment; rounding to the sentence stays `resumePoint`'s job, which is why
+  every path back to idle in `main.ts` goes through `rewindRun`. `saveMark`
+  refuses to write outside `running`/`finished` for the same reason: outside a
+  run the mark is wherever the last reset put it, not somewhere anyone typed.
 - **A work's body is fetched, so `source` cannot name one synchronously.**
   `createStream` is called from the `Runner` constructor and from
   `applySettings`, and the settings panel's handlers and `verify.mjs` all assume
