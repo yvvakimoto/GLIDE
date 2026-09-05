@@ -122,6 +122,20 @@ nothing about rendering.
   no thumb held is therefore deferred until release or the next key. Presses are
   timestamped at keydown so deferral never skews the measured speed. Details in
   `src/core/input.ts`.
+- **`finished` owns every key, and `space` is not one of them.** A run ends in
+  the middle of a keystroke — `tick` flips the phase and `onPhase` raises the
+  summary inside one frame — so the space the typist was already reaching for
+  lands on the summary a few milliseconds later. While `space` meant "run
+  again", the summary was being dismissed by the run that produced it. So
+  `main.ts` handles `finished` in its own block ahead of every other shortcut:
+  `esc` leaves, `tab` runs again, everything else dies there, and for
+  `SUMMARY_GUARD_MS` after the transition even those two are dead, because the
+  tail of the run's own typing is still arriving. A new shortcut added to the
+  global handler will *not* reach the summary unless it is added to that block
+  too, which is the intended default. `verify.mjs` pins all of this, and note
+  that its passes bleed settings into each other — the kana passes leave
+  `source: 'ja'` and `Space` assigned as a thumb key, so a later pass has to put
+  both back before `Space` can mean "start" again.
 - **Speed counts characters produced; accuracy counts presses.** `Keystroke.chars`
   is the numerator of every speed figure: on a correct press it is the characters
   the press *finished* — a unit's whole span on its last press, and 0 half-way

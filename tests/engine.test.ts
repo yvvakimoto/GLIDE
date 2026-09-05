@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CharState, Runner } from '../src/core/engine';
 import { DEFAULT_SETTINGS, type Settings } from '../src/core/settings';
@@ -220,8 +220,57 @@ describe('Runner', () => {
   });
 });
 
+describe('count-out', () => {
+  /** Runs a 15s run up to `elapsed` and reads the number the text panel paints. */
+  const at = (elapsed: number, patch: Partial<Settings> = {}) => {
+    const runner = new Runner(settings({ duration: 15, ...patch }));
+    runner.startNow(0);
+    runner.tick(elapsed);
+    return runner;
+  };
+
+  it('says nothing until the last three seconds', () => {
+    expect(at(0).countOutNumber).toBe(0);
+    expect(at(11_999).countOutNumber).toBe(0);
+  });
+
+  it('counts 3, 2, 1 down to the limit', () => {
+    expect(at(12_000).countOutNumber).toBe(3);
+    expect(at(12_500).countOutNumber).toBe(3);
+    expect(at(13_000).countOutNumber).toBe(2);
+    expect(at(14_000).countOutNumber).toBe(1);
+    expect(at(14_999).countOutNumber).toBe(1);
+  });
+
+  it('clears itself the moment the run stops', () => {
+    const finished = at(15_000);
+    expect(finished.phase).toBe('finished');
+    expect(finished.countOutNumber).toBe(0);
+  });
+
+  it('has nothing to announce in an untimed run', () => {
+    expect(at(12_500, { duration: 0 }).countOutNumber).toBe(0);
+    expect(at(999_999, { duration: 0 }).countOutNumber).toBe(0);
+  });
+
+  it('says nothing before the run has begun', () => {
+    expect(new Runner(settings({ duration: 15 })).countOutNumber).toBe(0);
+  });
+});
+
 describe('Runner, Japanese', () => {
+  /**
+   * Most of these tests want a passage containing some particular thing — a
+   * 拗音, a thumb-shifted kana, a bare し — and walk forward until one turns up.
+   * The corpus is drawn from a shuffled bag, so with a live `Math.random` that
+   * walk is a lottery, and one of these used to lose it about a quarter of the
+   * time. Fixing the bag makes the passage the same on every run: the shuffle
+   * degenerates to one deterministic permutation of the whole corpus, so the
+   * text is still many different passages, just always the same ones in the
+   * same order. `afterEach` puts `Math.random` back.
+   */
   const start = (patch: Partial<Settings>) => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     // qwerty so the romaji tests can name latin letters directly
     const s = settings({ source: 'ja', layout: 'qwerty', ...patch });
     const runner = new Runner(s);
@@ -229,7 +278,24 @@ describe('Runner, Japanese', () => {
     return runner;
   };
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const THUMB_CODE = { left: 'NonConvert', right: 'Convert' } as const;
+
+  /**
+   * One monotonic clock for the whole block. The walks below run for as long as
+   * they need to, so a test cannot pick a timestamp for the presses that follow
+   * one — it would have to guess how far the walk went, and typing into the
+   * past skews every gap the stats measure.
+   */
+  let t = 0;
+  beforeEach(() => {
+    t = 2000;
+  });
+  /** The next press time. 120ms clears the 90ms a single `typeNext` spans. */
+  const tick = (): number => (t += 120);
 
   /**
    * Types the presses the runner says are next, holding a thumb key when the
@@ -254,8 +320,34 @@ describe('Runner, Japanese', () => {
 
   /** Types this method's presses until the cursor reaches `chars` of the text. */
   const typeUpTo = (runner: Runner, chars: number): void => {
-    let t = 2000;
-    while (runner.cursor < chars && typeNext(runner, 1, (t += 100)) === 1);
+    while (runner.cursor < chars && typeNext(runner, 1, tick()) === 1);
+  };
+
+  /**
+   * A bound on the walks below. It is a guard against looping forever, not a
+   * budget: how deep into a passage the first 拗音 sits is the corpus's
+   * business and it moves whenever the corpus is rebuilt, so the bound is set
+   * far past anything the corpus plausibly asks for. Hitting it means the thing
+   * never appears at all, which is a regression worth failing on.
+   */
+  const WALK_LIMIT = 20_000;
+
+  /**
+   * Types presses until `found` holds, and leaves the runner sitting there.
+   * `what` names the thing for the failure message.
+   */
+  const walkTo = (runner: Runner, what: string, found: (r: Runner) => boolean): void => {
+    for (let i = 0; i < WALK_LIMIT; i++) {
+      if (found(runner)) return;
+      if (typeNext(runner, 1, tick()) === 0) break;
+    }
+    throw new Error(`no ${what} appeared in the buffered text`);
+  };
+
+  /** The cues for the unit under the cursor — one per press it takes. */
+  const headCues = (runner: Runner) => {
+    const plan = runner.cuePlan(10);
+    return plan.filter((c) => c.index === plan[0]?.index);
   };
 
   it('takes several presses per kana in romaji, and one in a kana layout', () => {
@@ -279,11 +371,9 @@ describe('Runner, Japanese', () => {
     // The point of counting characters rather than presses: romaji spends about
     // twice the keystrokes on a passage, and must not score twice the speed.
     const run = (jaMethod: Settings['jaMethod']) => {
-      // fix the passage bag so both methods are handed the same text
-      vi.spyOn(Math, 'random').mockReturnValue(0);
+      // `start` fixes the passage bag, so both methods are handed the same text
       const runner = start({ jaMethod });
       typeUpTo(runner, 120);
-      vi.restoreAllMocks();
       return runner;
     };
 
@@ -303,10 +393,8 @@ describe('Runner, Japanese', () => {
   it('counts a romaji cluster once, on the press that finishes it', () => {
     const runner = start({ jaMethod: 'romaji' });
     // walk to a unit that spans two characters (きゃ and friends)
-    for (let i = 0; i < 400; i++) {
-      if (runner.cuePlan(1)[0]?.span === 2) break;
-      typeNext(runner, 1, 2000 + i * 100);
-    }
+    walkTo(runner, 'two-character kana', (r) => r.cuePlan(1)[0]?.span === 2);
+
     const cue = runner.cuePlan(1)[0]!;
     expect(cue.span).toBe(2);
     const before = runner.stats.producedChars;
@@ -314,7 +402,7 @@ describe('Runner, Japanese', () => {
     expect(presses).toBeGreaterThan(1);
     for (let i = 0; i < presses; i++) {
       expect(runner.stats.producedChars, `press ${i}`).toBe(before);
-      typeNext(runner, 1, 40_000 + i * 100);
+      typeNext(runner, 1, tick());
     }
     expect(runner.stats.producedChars).toBe(before + 2);
   });
@@ -322,27 +410,25 @@ describe('Runner, Japanese', () => {
   it('needs the thumb key held for a thumb-shifted kana', () => {
     const runner = start({ jaMethod: 'nicola' });
     // walk to the first press that wants a thumb
-    for (let i = 0; i < 60; i++) {
-      const chord = runner.expectedChords(1)[0]!;
-      if (chord.thumb !== 'none') {
-        // without the thumb, the same key is a different kana
-        const base = 2000 + i * 200;
-        runner.handleKeydown(keydown(chord.code), base);
-        runner.handleKeyup(keydown(chord.code), base + 40);
-        expect(runner.blocked).toBe(true);
-        expect(runner.mistyped).not.toBe(chord.label);
+    walkTo(runner, 'thumb-shifted kana', (r) => r.expectedChords(1)[0]!.thumb !== 'none');
 
-        // no deleting: pressing the thumb and the key together carries on
-        const thumb = THUMB_CODE[chord.thumb];
-        runner.handleKeydown(keydown(thumb, false, thumb), base + 80);
-        runner.handleKeydown(keydown(chord.code), base + 100);
-        expect(runner.blocked).toBe(false);
-        expect(runner.states[runner.cursor - 1]).toBe(CharState.Fixed);
-        return;
-      }
-      typeNext(runner, 1, 2000 + i * 90);
-    }
-    throw new Error('no thumb-shifted kana appeared in the first 60 presses');
+    const chord = runner.expectedChords(1)[0]!;
+    // what the walk stopped on, said again so the compiler can see it too
+    if (chord.thumb === 'none') throw new Error('walked to a chord that wants no thumb');
+
+    // without the thumb, the same key is a different kana
+    const base = tick();
+    runner.handleKeydown(keydown(chord.code), base);
+    runner.handleKeyup(keydown(chord.code), base + 40);
+    expect(runner.blocked).toBe(true);
+    expect(runner.mistyped).not.toBe(chord.label);
+
+    // no deleting: pressing the thumb and the key together carries on
+    const thumb = THUMB_CODE[chord.thumb];
+    runner.handleKeydown(keydown(thumb, false, thumb), base + 80);
+    runner.handleKeydown(keydown(chord.code), base + 100);
+    expect(runner.blocked).toBe(false);
+    expect(runner.states[runner.cursor - 1]).toBe(CharState.Fixed);
   });
 
   it('plans the same presses the ribbon draws, by every method', () => {
@@ -358,72 +444,53 @@ describe('Runner, Japanese', () => {
   it('tells the truth about a kana that takes three fingers', () => {
     // 拗音 such as きゃ: one unit, two characters, three presses on three keys.
     const runner = start({ jaMethod: 'romaji' });
-    for (let i = 0; i < 2000; i++) {
-      const plan = runner.cuePlan(10);
-      if (!plan.length) break;
-      const head = plan.filter((c) => c.index === plan[0]!.index);
-      if (head.length >= 3 && head[0]!.span === 2) {
-        expect(head.map((c) => c.slot)).toEqual([0, 1, 2]);
-        expect(head.map((c) => c.at)).toEqual([0, 1, 2]);
-        expect(head.map((c) => c.label).join().replace(/,/g, '')).toMatch(/^[a-z]{3}$/);
-        // the whole point: the old per-unit plan reported the first finger thrice
-        expect(new Set(head.map((c) => c.finger)).size).toBeGreaterThan(1);
-        return;
-      }
-      if (!typeNext(runner, 1, 2000 + i * 80)) break;
-    }
-    throw new Error('no three-press kana appeared');
+    walkTo(runner, 'three-press kana', (r) => {
+      const head = headCues(r);
+      return head.length >= 3 && head[0]!.span === 2;
+    });
+
+    const head = headCues(runner);
+    expect(head.map((c) => c.slot)).toEqual([0, 1, 2]);
+    expect(head.map((c) => c.at)).toEqual([0, 1, 2]);
+    expect(head.map((c) => c.label).join().replace(/,/g, '')).toMatch(/^[a-z]{3}$/);
+    // the whole point: the old per-unit plan reported the first finger thrice
+    expect(new Set(head.map((c) => c.finger)).size).toBeGreaterThan(1);
   });
 
   it('drops the presses already made inside a unit', () => {
     const runner = start({ jaMethod: 'romaji' });
-    for (let i = 0; i < 2000; i++) {
-      const plan = runner.cuePlan(10);
-      if (!plan.length) break;
-      const head = plan.filter((c) => c.index === plan[0]!.index);
-      if (head.length >= 2) {
-        const second = head[1]!;
-        typeNext(runner, 1, 3000 + i * 80);
-        const now = runner.cuePlan(10)[0]!;
-        expect(now.label).toBe(second.label);
-        expect(now.finger).toBe(second.finger);
-        expect(now.index).toBe(second.index);
-        expect(now.slot).toBe(0);
-        expect(now.at).toBe(0);
-        return;
-      }
-      if (!typeNext(runner, 1, 2000 + i * 80)) break;
-    }
-    throw new Error('no multi-press kana appeared');
+    walkTo(runner, 'multi-press kana', (r) => headCues(r).length >= 2);
+
+    const second = headCues(runner)[1]!;
+    typeNext(runner, 1, tick());
+    const now = runner.cuePlan(10)[0]!;
+    expect(now.label).toBe(second.label);
+    expect(now.finger).toBe(second.finger);
+    expect(now.index).toBe(second.index);
+    expect(now.slot).toBe(0);
+    expect(now.at).toBe(0);
   });
 
   it('names the hand that presses and the thumb that shifts, separately', () => {
     const runner = start({ jaMethod: 'nicola' });
-    for (let i = 0; i < 80; i++) {
-      const cue = runner.cuePlan(1)[0]!;
-      if (cue.thumb !== 'none') {
-        expect(cue.span).toBe(1);
-        expect(cue.slot).toBe(0);
-        expect(cue.finger).not.toBe('thumb');
-        // the hand is the character key's own, never the shifting thumb's
-        expect(cue.hand).toBe(cue.finger[0] === 'l' ? 'left' : 'right');
-        return;
-      }
-      if (!typeNext(runner, 1, 2000 + i * 90)) break;
-    }
-    throw new Error('no thumb-shifted kana appeared in the first 80 presses');
+    walkTo(runner, 'thumb-shifted kana', (r) => r.cuePlan(1)[0]!.thumb !== 'none');
+
+    const cue = runner.cuePlan(1)[0]!;
+    expect(cue.span).toBe(1);
+    expect(cue.slot).toBe(0);
+    expect(cue.finger).not.toBe('thumb');
+    // the hand is the character key's own, never the shifting thumb's
+    expect(cue.hand).toBe(cue.finger[0] === 'l' ? 'left' : 'right');
   });
 
   it('cues the cross-hand press a kana layout is built around', () => {
     // 親指シフト means one hand strikes while the *other* thumb holds; that split
     // is the thing the mark exists to teach, so at least one must turn up.
     const runner = start({ jaMethod: 'nicola' });
-    for (let i = 0; i < 200; i++) {
-      const cue = runner.cuePlan(1)[0]!;
-      if (cue.thumb !== 'none' && cue.thumb !== cue.hand) return;
-      if (!typeNext(runner, 1, 2000 + i * 90)) break;
-    }
-    throw new Error('no cross-hand thumb-shift appeared');
+    walkTo(runner, 'cross-hand thumb-shift', (r) => {
+      const cue = r.cuePlan(1)[0]!;
+      return cue.thumb !== 'none' && cue.thumb !== cue.hand;
+    });
   });
 
   it('never cues a key that is not on the board', () => {
@@ -439,42 +506,39 @@ describe('Runner, Japanese', () => {
   it('accepts any spelling the romaji table allows', () => {
     // walk to a し and finish it with `shi` rather than the canonical `si`
     const runner = start({ jaMethod: 'romaji' });
-    for (let i = 0; i < 400; i++) {
-      // a bare し, not the start of しゃ/しゅ/しょ
-      const solo = runner.text[runner.cursor] === 'し' && !/[ゃゅょぁぃぅぇぉ]/.test(runner.text[runner.cursor + 1] ?? '');
-      if (solo) {
-        const units = runner.unitsDone;
-        let t = 5000 + i * 90;
-        for (const letter of 'shi') {
-          runner.handleKeydown(keyFor(settings({ layout: 'qwerty' }), letter), (t += 80));
-        }
-        // romaji resolves on keydown; the release is irrelevant but harmless
-        expect(runner.blocked).toBe(false);
-        expect(runner.stats.errorKeys).toBe(0);
-        expect(runner.unitsDone).toBe(units + 1);
-        return;
-      }
-      if (typeNext(runner, 1, 2000 + i * 90) === 0) break;
+    // a bare し, not the start of しゃ/しゅ/しょ
+    walkTo(runner, 'bare し', (r) =>
+      r.text[r.cursor] === 'し' && !/[ゃゅょぁぃぅぇぉ]/.test(r.text[r.cursor + 1] ?? ''));
+
+    const units = runner.unitsDone;
+    for (const letter of 'shi') {
+      runner.handleKeydown(keyFor(settings({ layout: 'qwerty' }), letter), tick());
     }
-    throw new Error('no し appeared in the buffered text');
+    // romaji resolves on keydown; the release is irrelevant but harmless
+    expect(runner.blocked).toBe(false);
+    expect(runner.stats.errorKeys).toBe(0);
+    expect(runner.unitsDone).toBe(units + 1);
   });
 
   it('does not hold a mistype against a stray second n', () => {
+    // This one cannot use `walkTo`: whether a ん took a single press is only
+    // knowable from the state either side of that press, so it looks before and
+    // after each one rather than at a standing cue.
     const runner = start({ jaMethod: 'romaji' });
     let lastCursor = -1;
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < WALK_LIMIT; i++) {
       const cursor = runner.cursor;
       const isN = runner.text[cursor] === 'ん';
       const firstPressOfUnit = cursor !== lastCursor;
       lastCursor = cursor;
       const units = runner.unitsDone;
-      if (typeNext(runner, 1, 3000 + i * 90) === 0) break;
+      if (typeNext(runner, 1, tick()) === 0) break;
 
       // ん finished by a single n is the case where a habitual second n is free
       if (isN && firstPressOfUnit && runner.unitsDone === units + 1) {
         const errors = runner.stats.errorKeys;
         const strokes = runner.stats.correctKeys;
-        runner.handleKeydown(keyFor(settings({ layout: 'qwerty' }), 'n'), 9000 + i * 90);
+        runner.handleKeydown(keyFor(settings({ layout: 'qwerty' }), 'n'), tick());
         expect(runner.blocked).toBe(false);
         expect(runner.stats.errorKeys).toBe(errors);
         expect(runner.stats.correctKeys).toBe(strokes);
