@@ -1,4 +1,4 @@
-# Store and check out everything with LF, so a Windows checkout does not produce
-# whole-file diffs against the LF the tooling writes.
-* text=auto eol=lf
-*.png binary
+# Generated, large, and committed so the app works offline. Marking them keeps
+# `git log -p` and pull-request views from dumping megabytes of prose.
+src/corpus/works/*.json -diff linguist-generated
+src/corpus/works-index.json -diff linguist-generated

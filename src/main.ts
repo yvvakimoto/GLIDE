@@ -8,8 +8,28 @@ import '@fontsource/jetbrains-mono/800.css';
 import './style/fonts-ja.css';
 import './style/app.css';
 
-import { corpusCharset } from './core/corpus';
-import { Runner } from './core/engine';
+import { corpusCharset, fallbackFor } from './core/corpus';
+import { Runner, type EndReason } from './core/engine';
+import { recordRun, rowOf, type RunEnd } from './core/history';
+import {
+  bookmarkOf,
+  clearAllProgress,
+  clearBookmark,
+  loadProgress,
+  resumeAt,
+  saveBookmark,
+  type Bookmark,
+  type ProgressStore,
+} from './core/progress';
+import {
+  getLoadedWork,
+  getWorkMeta,
+  isWorkId,
+  listWorks,
+  loadWork,
+  type Work,
+  type WorkMeta,
+} from './core/works';
 import { physKey } from './core/keyboard-geometry';
 import { buildUnits, keyLabels, methodCharset, methodKind, type KeyLabel, type MethodSpec } from './core/method';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './core/settings';
@@ -18,6 +38,7 @@ import { drawChart } from './render/chart';
 import { renderScale } from './render/quality';
 import { byId, setOpen } from './ui/dom';
 import { hudRefs, renderConfigChips, updateHud } from './ui/hud';
+import { renderContentsPanel, type WorkLoadState } from './ui/contents-panel';
 import { renderSettingsPanel } from './ui/settings-panel';
 import { Clicker } from './ui/sound';
 import { renderSummary } from './ui/summary';
@@ -60,6 +81,16 @@ function buildUnitsCanType(spec: MethodSpec, char: string): boolean {
 }
 
 let settings: Settings = loadSettings();
+
+/**
+ * A work's body is fetched, so a stored `source` naming one cannot be honoured
+ * before the first frame. Start on the matching shuffle and swap the work in
+ * when it lands. Direct assignment rather than applySettings, because saving the
+ * fallback would throw away the stored work id.
+ */
+const storedWork = isWorkId(settings.source) ? settings.source : undefined;
+if (storedWork) settings = { ...settings, source: fallbackFor(storedWork) };
+
 const runner = new Runner(settings);
 const refs = hudRefs();
 const clicker = new Clicker(settings.sound);
@@ -74,11 +105,13 @@ const overlays = {
   count: byId('overlay-count'),
   summary: byId('overlay-summary'),
   settings: byId('overlay-settings'),
+  contents: byId('overlay-contents'),
 };
 const countNumber = byId('count-number');
 const countOut = byId('count-out');
 const summaryRoot = byId('summary');
 const settingsRoot = byId('settings');
+const contentsRoot = byId('contents');
 
 /**
  * A run ends in the middle of a keystroke: the space the typist was already
@@ -87,7 +120,29 @@ const settingsRoot = byId('settings');
  */
 const SUMMARY_GUARD_MS = 600;
 
-let settingsOpen = false;
+/** How often the bookmark may be rewritten mid-run. localStorage is synchronous. */
+const BOOKMARK_THROTTLE_MS = 3000;
+
+/**
+ * Which overlay panel is up. Two booleans across four setOpen calls is where an
+ * "everything is closed but the idle screen is still hidden" bug lives.
+ */
+type Panel = 'none' | 'settings' | 'contents';
+let panel: Panel = 'none';
+let workLoad: WorkLoadState = { state: 'idle' };
+let progress: ProgressStore = loadProgress();
+/** The work the reader chose, held even while its body is still arriving. */
+let currentWorkId: string | undefined = storedWork;
+/** The chunk last written to the bookmark, so the per-frame check is a comparison. */
+let savedChunk = -1;
+let lastBookmarkAt = -Infinity;
+/**
+ * Whether this run has already been counted as a sitting. `saveMark('end')` runs
+ * wherever a run stops *and* again on pagehide, and the stats still hold the
+ * run's characters at that point — so without this, closing the tab after a run
+ * counts the same sitting twice and doubles the characters with it.
+ */
+let runCounted = false;
 let lastCountNumber = 0;
 let lastCountOut = 0;
 let finishedAt = -Infinity;
@@ -115,12 +170,21 @@ function summaryLegend(): (code: string) => string {
 }
 
 function applySettings(patch: Partial<Settings>): void {
+  const sourceChanged = patch.source !== undefined && patch.source !== settings.source;
+  // Choosing a non-work source from the settings panel puts the work down. The
+  // load guard matters: while a work is arriving the source is its fallback
+  // shuffle, and that must not be read as the reader walking away from it.
+  if (patch.source !== undefined && !isWorkId(patch.source) && workLoad.state === 'idle') {
+    currentWorkId = undefined;
+  }
   settings = { ...settings, ...patch };
   saveSettings(settings);
   clicker.enabled = settings.sound;
   runner.configure(settings);
+  if (sourceChanged) resumeBookmark();
   renderConfigChips(refs, settings, openSettings);
-  if (settingsOpen) renderPanel();
+  if (panel === 'settings') renderPanel();
+  if (panel === 'contents') renderContents();
   textView.sync(runner.text, runner.cursor);
   // the stylesheet reads this to drop the blurs; the canvases read the setting
   document.documentElement.dataset.graphics = settings.graphics;
@@ -128,23 +192,188 @@ function applySettings(patch: Partial<Settings>): void {
   stripEpoch++;
 }
 
+/** The chosen work's index entry, available before its body is. */
+function activeMeta(): WorkMeta | undefined {
+  return currentWorkId ? getWorkMeta(currentWorkId) : undefined;
+}
+
+/** Its body, once that has landed. */
+function activeWork(): Work | undefined {
+  return currentWorkId ? getLoadedWork(currentWorkId) : undefined;
+}
+
+function activeBookmark(): (Bookmark & { stale: boolean }) | undefined {
+  const meta = activeMeta();
+  return meta ? bookmarkOf(progress, meta.id, meta.stamp) : undefined;
+}
+
+/** Puts the runner at the bookmark for the current work. A shuffle has none. */
+function resumeBookmark(): void {
+  const work = activeWork();
+  if (!work || settings.source !== work.id) return;
+  const mark = bookmarkOf(progress, work.id, work.stamp);
+  savedChunk = resumeAt(mark, work.chunks.length);
+  runner.seek(savedChunk);
+}
+
+/**
+ * Switching to a work is the one asynchronous thing in the app, so it gets its
+ * own funnel: the body lands first, and only then does `source` move. That keeps
+ * createStream synchronous, which everything from the Runner constructor to
+ * verify.mjs depends on.
+ */
+async function selectWork(id: string): Promise<void> {
+  currentWorkId = id;
+  if (getLoadedWork(id)) {
+    applySettings({ source: id });
+    return;
+  }
+  workLoad = { state: 'loading', id };
+  if (panel === 'contents') renderContents();
+  try {
+    await loadWork(id);
+    workLoad = { state: 'idle' };
+    applySettings({ source: id });
+  } catch (error) {
+    // Leave `source` where it is: nothing should move under the reader because a
+    // download failed. The panel explains it instead.
+    workLoad = { state: 'error', id, message: String(error) };
+    if (panel === 'contents') renderContents();
+  }
+}
+
+/**
+ * Writes the place. `end` also counts the sitting; `tick` is the cheap
+ * per-frame path and only fires on a chunk boundary, at most every few seconds.
+ */
+function saveMark(reason: 'tick' | 'end'): void {
+  const work = activeWork();
+  const mark = runner.mark;
+  if (!work || !mark) return;
+  const now = performance.now();
+  if (reason === 'tick') {
+    if (mark.chunk === savedChunk) return;
+    if (now - lastBookmarkAt < BOOKMARK_THROTTLE_MS) return;
+  }
+  const patch: Partial<Bookmark> = { chunk: mark.chunk, chars: mark.chars, stamp: work.stamp };
+  if (reason === 'end' && !runCounted) {
+    const typed = runner.stats.producedChars;
+    if (typed > 0) {
+      const before = bookmarkOf(progress, work.id, work.stamp);
+      patch.typed = before.typed + typed;
+      patch.sessions = before.sessions + 1;
+      runCounted = true;
+    }
+  }
+  savedChunk = mark.chunk;
+  lastBookmarkAt = now;
+  progress = saveBookmark(work.id, patch);
+}
+
+function jumpToChapter(index: number): void {
+  const work = activeWork();
+  const chapter = work?.chapters[index];
+  if (!work || !chapter) return;
+  // A jump *is* "I am here now", so the bookmark moves; `furthest` is left alone
+  // inside saveBookmark, so the trail of what you have been through survives.
+  progress = saveBookmark(work.id, {
+    chunk: chapter.start,
+    chars: work.offsets[chapter.start] ?? 0,
+    stamp: work.stamp,
+  });
+  savedChunk = chapter.start;
+  runner.seek(chapter.start);
+  textView.sync(runner.text, runner.cursor);
+  boardDirty = true;
+  renderContents();
+}
+
+function restartWork(): void {
+  const work = activeWork();
+  if (!work) return;
+  progress = clearBookmark(work.id);
+  savedChunk = 0;
+  runner.seek(0);
+  textView.sync(runner.text, runner.cursor);
+  boardDirty = true;
+  renderContents();
+}
+
+/** Chapter titles are looked up once per chunk, not once per frame. */
+let chapterCache = { chunk: -1, title: '' };
+
+function chapterTitleAt(work: Work, chunk: number): string {
+  if (chapterCache.chunk !== chunk) {
+    const chapter =
+      work.chapters.find((c) => chunk < c.start + c.count) ?? work.chapters[work.chapters.length - 1];
+    chapterCache = { chunk, title: chapter?.title ?? '' };
+  }
+  return chapterCache.title;
+}
+
+/** What the HUD's source line says while a work is being typed. */
+function workLine(): string | undefined {
+  const work = activeWork();
+  const mark = runner.mark;
+  if (!work || !mark || settings.source !== work.id) return undefined;
+  const percent = Math.round((mark.chars / Math.max(1, mark.total)) * 100);
+  const chapter = chapterTitleAt(work, mark.chunk);
+  return `${work.author}  ${work.title}${chapter ? `  ${chapter}` : ''}  ${percent}%`;
+}
+
+function renderContents(): void {
+  renderContentsPanel({
+    root: contentsRoot,
+    works: listWorks(),
+    meta: activeMeta(),
+    work: activeWork(),
+    bookmark: activeBookmark(),
+    load: workLoad,
+    duration: settings.duration,
+    onPickWork: (id) => void selectWork(id),
+    onJump: jumpToChapter,
+    onRestart: restartWork,
+    onClose: closePanel,
+  });
+}
+
+/** Tab, from idle or from the summary. A work resumes; a shuffle starts over. */
+function restartRun(now: number): void {
+  const work = activeWork();
+  if (work && settings.source === work.id) {
+    const mark = bookmarkOf(progress, work.id, work.stamp);
+    savedChunk = resumeAt(mark, work.chunks.length);
+    runner.seek(savedChunk);
+  } else {
+    runner.reset();
+  }
+  board.reset();
+  runner.beginCountIn(now);
+}
+
+function openContents(): void {
+  if (runner.phase === 'running' || runner.phase === 'countin') return;
+  panel = 'contents';
+  renderContents();
+}
+
 function renderPanel(): void {
   renderSettingsPanel({
     root: settingsRoot,
     settings,
     onChange: applySettings,
-    onClose: closeSettings,
+    onClose: closePanel,
   });
 }
 
 function openSettings(): void {
   if (runner.phase === 'running' || runner.phase === 'countin') return;
-  settingsOpen = true;
+  panel = 'settings';
   renderPanel();
 }
 
-function closeSettings(): void {
-  settingsOpen = false;
+function closePanel(): void {
+  panel = 'none';
 }
 
 runner.onTextChange = () => {
@@ -163,17 +392,33 @@ window.addEventListener('keyup', (event) => {
   if (runner.handleKeyup(event, performance.now())) event.preventDefault();
 });
 
+/** A run is finished by the timer, by the typist, or by the work running out. */
+const endOf = (reason: EndReason): RunEnd =>
+  reason === 'time' ? 'time' : reason === 'end' ? 'end' : 'quit';
+
 runner.onPhase = (phase, previous) => {
   boardDirty = true;
-  if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) board.reset();
+  if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) {
+    board.reset();
+    runCounted = false;
+  }
   if (phase === 'finished') {
     finishedAt = performance.now();
+    // Every ending routes through setPhase, so this one call covers the timer,
+    // Esc, a window blur and a work running out.
+    saveMark('end');
+    const summary = runner.summary(summaryLegend());
+    // Record before rendering, so the chart's last point is the run you just did.
+    const run = rowOf(summary, settings, runner.method.script, endOf(runner.endReason));
+    const history = recordRun(run);
     renderSummary({
       root: summaryRoot,
-      summary: runner.summary(summaryLegend()),
+      summary,
       settings,
       spec: runner.method,
       quit: runner.endReason === 'quit',
+      history,
+      run,
     });
   }
 };
@@ -181,10 +426,12 @@ runner.onPhase = (phase, previous) => {
 window.addEventListener('keydown', (event) => {
   const now = performance.now();
 
-  if (settingsOpen) {
+  // A panel owns every key while it is up — `c` typed into the contents list has
+  // to die here, or it falls through and reopens the panel it was typed into.
+  if (panel !== 'none') {
     if (event.key === 'Escape') {
       event.preventDefault();
-      closeSettings();
+      closePanel();
     }
     return;
   }
@@ -214,10 +461,18 @@ window.addEventListener('keydown', (event) => {
     if (!isThumbKey && event.key === 'Tab') {
       event.preventDefault();
       if (!guarded) {
-        runner.reset();
-        board.reset();
-        runner.beginCountIn(now);
+        // `reset` empties the buffer but leaves the stream where it stopped, so
+        // for a work it would skip the paragraph you did not finish.
+        restartRun(now);
       }
+      return;
+    }
+    // The run just moved the bar, which is exactly when you want to see it. `c`
+    // is a letter the run's own tail can still deliver, so it obeys the guard
+    // like esc and tab do.
+    if (!isThumbKey && (event.key === 'c' || event.key === 'C')) {
+      event.preventDefault();
+      if (!guarded) openContents();
       return;
     }
     // everything else dies here; space would otherwise scroll the overlay
@@ -233,9 +488,7 @@ window.addEventListener('keydown', (event) => {
 
   if (!isThumbKey && event.key === 'Tab') {
     event.preventDefault();
-    runner.reset();
-    board.reset();
-    runner.beginCountIn(now);
+    restartRun(now);
     return;
   }
 
@@ -254,11 +507,24 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  if (idle && !isThumbKey && (event.key === 'c' || event.key === 'C')) {
+    event.preventDefault();
+    openContents();
+    return;
+  }
+
   if (runner.handleKeydown(event, now)) event.preventDefault();
 });
 
 window.addEventListener('blur', () => {
   if (runner.phase === 'running') runner.abort(performance.now());
+});
+
+// Not `beforeunload`: it is unreliable under bfcache and on mobile, and these two
+// fire in the cases it was meant to cover.
+window.addEventListener('pagehide', () => saveMark('end'));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveMark('end');
 });
 
 const stripCtx = speedCanvas.getContext('2d');
@@ -335,10 +601,15 @@ function frame(): void {
   runner.tick(now);
 
   const phase = runner.phase;
-  setOpen(overlays.idle, phase === 'idle' && !settingsOpen);
+  // One comparison per frame. Writing on every keystroke would put a synchronous
+  // localStorage call on the one path in this app that refuses to do work; this
+  // bounds a lost place to a single paragraph.
+  if (phase === 'running') saveMark('tick');
+  setOpen(overlays.idle, phase === 'idle' && panel === 'none');
   setOpen(overlays.count, phase === 'countin');
-  setOpen(overlays.summary, phase === 'finished' && !settingsOpen);
-  setOpen(overlays.settings, settingsOpen);
+  setOpen(overlays.summary, phase === 'finished' && panel === 'none');
+  setOpen(overlays.settings, panel === 'settings');
+  setOpen(overlays.contents, panel === 'contents');
 
   // An overlay is a full-viewport backdrop blur, and the browser can only leave
   // it alone while what is behind it holds still — the drifting background on its
@@ -400,7 +671,7 @@ function frame(): void {
   }
 
   drawSpeedStrip(now);
-  updateHud(refs, runner);
+  updateHud(refs, runner, workLine());
 
   requestAnimationFrame(frame);
 }
@@ -415,6 +686,25 @@ function exposeDevHooks(): void {
         return settings;
       },
       applySettings,
+      /** switching to a work is async: verify must await this, not applySettings */
+      selectWork,
+      get mark() {
+        return runner.mark;
+      },
+      seekChunk: (n: number) => {
+        const work = activeWork();
+        if (!work) return false;
+        // -1 means the last chunk, so a test can reach the end of a long work
+        const chunk = n < 0 ? Math.max(0, work.chunks.length + n) : n;
+        savedChunk = chunk;
+        runner.seek(chunk);
+        textView.sync(runner.text, runner.cursor);
+        return true;
+      },
+      clearProgress: () => {
+        progress = clearAllProgress();
+        savedChunk = -1;
+      },
       /** the presses that type `char` under the active method */
       pressesFor: (char: string) => {
         const units = buildUnits(char, 0, runner.method);
@@ -451,6 +741,10 @@ function exposeDevHooks(): void {
         correct: runner.stats.correctKeys,
         errors: runner.stats.errorKeys,
         series: runner.stats.series.length,
+        exhausted: runner.exhausted,
+        chunk: runner.mark?.chunk ?? null,
+        endReason: runner.endReason,
+        source: settings.source,
         upcoming: runner.expectedChords(8).map((c) => c.label).join(''),
       }),
     },
@@ -483,3 +777,7 @@ noteInputRequirements();
 renderConfigChips(refs, settings, openSettings);
 textView.sync(runner.text, runner.cursor);
 requestAnimationFrame(frame);
+
+// The frame loop is already running, so a slow work download cannot hold up the
+// first paint. No top-level await: this module runs at script scope.
+if (storedWork) void selectWork(storedWork);

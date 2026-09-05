@@ -1210,6 +1210,99 @@ kbd {
   letter-spacing: 0.02em;
 }
 
+/*
+ * The 写経 chapter list.
+ *
+ * Deliberately transition-free. This lives inside the settings overlay, which
+ * carries a backdrop-filter under `rich`, and a repaint anywhere in that subtree
+ * re-runs the filter over the whole viewport. A hover is one repaint and the
+ * panel already pays that for `.seg button`; a transition would be one per frame
+ * for the length of the ease, which is the cost worth refusing. The chapter fill
+ * is static for the same reason.
+ */
+.toc {
+  display: grid;
+  gap: 4px;
+}
+
+.toc-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.4em 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: var(--ui-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.toc-row[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.toc-row:not([aria-disabled='true']):hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.toc-row .n {
+  color: var(--dimmer);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.toc-row .t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-row .c {
+  color: var(--dimmer);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.toc-row[data-state='done'] {
+  color: var(--text);
+}
+
+.toc-row[data-state='done'] .n {
+  color: var(--accent);
+}
+
+.toc-row[data-state='here'] {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(61, 214, 255, 0.06);
+}
+
+/* how far through the chapter you are, along its bottom edge */
+.toc-bar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  height: 2px;
+}
+
+.toc-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
 .source-select {
   font-family: var(--mono);
   font-size: 14px;

@@ -84,7 +84,11 @@ export function renderConfigChips(refs: HudRefs, settings: Settings, openSetting
   setText(refs.brandTag, japanese ? `${method} - ${sourceLabel(settings.source)}` : `${layout.name} - ${layout.note}`);
 }
 
-export function updateHud(refs: HudRefs, runner: Runner): void {
+/**
+ * `workLine` replaces the passage attribution for 写経, and is passed in rather
+ * than looked up so the HUD stays ignorant of works.
+ */
+export function updateHud(refs: HudRefs, runner: Runner, workLine?: string): void {
   const elapsed = runner.elapsedMs;
   const live = runner.phase === 'running' || runner.phase === 'finished';
   const series = runner.stats.series;
@@ -103,12 +107,19 @@ export function updateHud(refs: HudRefs, runner: Runner): void {
 
   // scaleX, not width: width is a layout property, it carries the bar's glow
   // with it, and its transition used to be restarted by every frame's new value
-  const progress = Math.round((live ? runner.progress : 0) * 1000) / 1000;
+  // A work's bar is the long arc through the text rather than through this
+  // sitting, so it wins even on a timed run — the clock already has its own big
+  // readout — and it stays up at idle, which is when you want to see where you
+  // left off.
+  const mark = runner.mark;
+  const fraction = mark ? mark.chars / Math.max(1, mark.total) : live ? runner.progress : 0;
+  const progress = Math.round(fraction * 1000) / 1000;
   setStyle(refs.progress, 'transform', `scaleX(${progress})`);
 
   const attribution = runner.attribution;
   setText(
     refs.source,
-    attribution ? `${attribution.title}${attribution.author ? ` - ${attribution.author}` : ''}` : '',
+    workLine ??
+      (attribution ? `${attribution.title}${attribution.author ? ` - ${attribution.author}` : ''}` : ''),
   );
 }

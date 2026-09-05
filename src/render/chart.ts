@@ -17,6 +17,10 @@ export type ChartOptions = {
   xMin?: number;
   maWindow: number;
   axes?: boolean;
+  /** how an x value is labelled; defaults to seconds */
+  xLabel?: (t: number) => string;
+  /** caption above the plot; defaults to naming the moving-average window */
+  axisNote?: string;
   /** draw the current value at the right edge */
   readout?: boolean;
   /** low-cost mode: no glow under the moving-average line */
@@ -53,6 +57,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, opts: ChartOptions): vo
 
   const sx = (t: number) => x0 + ((t - xMin) / (xMax - xMin)) * (x1 - x0);
   const sy = (v: number) => y1 - (Math.min(v, yMax) / yMax) * (y1 - y0);
+  const xLabel = opts.xLabel ?? ((v: number) => `${Math.round(v)}s`);
 
   ctx.save();
 
@@ -88,7 +93,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, opts: ChartOptions): vo
       ctx.lineTo(Math.round(sx(t)) + 0.5, y1);
       ctx.stroke();
       ctx.fillStyle = rgba(GRID, 0.5);
-      ctx.fillText(`${Math.round(t)}s`, sx(t), y1 + 6);
+      ctx.fillText(xLabel(t), sx(t), y1 + 6);
     }
   }
 
@@ -161,7 +166,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, opts: ChartOptions): vo
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = rgba(GRID, 0.55);
-    ctx.fillText(`wpm  /  ${opts.maWindow}s moving average`, x0, 0);
+    ctx.fillText(opts.axisNote ?? `wpm  /  ${opts.maWindow}s moving average`, x0, 0);
   }
 
   ctx.restore();

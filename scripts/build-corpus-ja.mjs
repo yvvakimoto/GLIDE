@@ -15,117 +15,29 @@
  * come from.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(HERE, '..');
-const CACHE = join(HERE, '.cache-ja');
+import {
+  AUTHORS,
+  CUTOFF,
+  ENTITIES,
+  ROOT,
+  TYPEABLE,
+  biblioBlock,
+  fetchText as fetchCached,
+} from './lib/aozora.mjs';
+
 const OUT = join(ROOT, 'src', 'corpus');
 const OFFLINE = process.argv.includes('--offline');
 const LIMIT = Number(process.argv[process.argv.indexOf('--limit') + 1]) || 999;
-
-/**
- * Aozora person ids, verified against index_pages/person{id}.html.
- *
- * These are children's-literature authors because their editions are 総ルビ —
- * every kanji carries a reading — which is what makes a fully-kana sentence
- * recoverable. Partially-annotated editions (漱石, 芥川, 太宰) yield almost
- * nothing once unresolved kanji are dropped, so they are not worth the fetch.
- *
- * `died` is not decoration: it is the selection rule. 青空文庫 publishes what is
- * public domain *in Japan*, but this corpus ships inside a site hosted in the
- * United States, where the URAA restored copyright in foreign works that were
- * still protected in their home country on 1996-01-01. Japan's term was then
- * life + 50 years, so an author who died in 1945 or earlier had already passed
- * into the Japanese public domain before that date and has nothing to restore.
- * An author who died later — 小川未明 (1961) and 楠山正雄 (1954) were both in
- * this list once — may still be under US copyright however freely 青空文庫 may
- * distribute them, so they are out. Do not add an author without checking this.
- */
-const CUTOFF = 1945;
-
-/*
- * `works` is how deep to read that author's card list, and it is set to their
- * whole published catalogue rather than a round number. That matters more than
- * it looks: 小川未明 alone used to supply half the corpus, and once he was out
- * the shortfall could not be made up by adding authors — 北原白秋, 野口雨情,
- * 山村暮鳥, 与謝野晶子 and 夢野久作 were all tried here and yielded between one
- * and nine usable sentences each, because their editions are not 総ルビ, and
- * 有島武郎 (52 works read) and 宮原晃一郎 (26) came in under MIN_SENTENCES.
- * Reading the *whole* catalogue of the authors who are 総ルビ is what makes up
- * the difference instead: 宮沢賢治 gives 120 sentences at 40 works and 400 at
- * 278. So do not trim these numbers back to save fetches — the cache makes a
- * re-run cheap, while a thin corpus makes the Japanese modes repeat.
- */
-const AUTHORS = [
-  { id: 81, name: '宮沢賢治', died: 1933, works: 278 },
-  { id: 121, name: '新美南吉', died: 1943, works: 126 },
-  { id: 158, name: '島崎藤村', died: 1943, works: 56 },
-  { id: 107, name: '鈴木三重吉', died: 1936, works: 32 },
-  { id: 212, name: '竹久夢二', died: 1934, works: 27 },
-];
-
-for (const author of AUTHORS) {
-  if (!(author.died <= CUTOFF)) {
-    throw new Error(
-      `${author.name} (没 ${author.died}) は ${CUTOFF} 年より後の没年です。` +
-        '米国で著作権が回復している可能性があるため、この一覧には入れられません。',
-    );
-  }
-}
 
 const MIN_LEN = 16;
 const MAX_LEN = 64;
 /** a source with fewer sentences than this is not worth listing */
 const MIN_SENTENCES = 25;
 
-/** Everything a kana layout (and the romaji tables) can produce. */
-const TYPEABLE = new Set([
-  ...'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん',
-  ...'がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ',
-  ...'ぁぃぅぇぉゃゅょっ',
-  ...'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン',
-  ...'ガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポヴ',
-  ...'ァィゥェォャュョッ',
-  ...'ー、。',
-]);
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchText(url, name) {
-  await mkdir(CACHE, { recursive: true });
-  const file = join(CACHE, name);
-  if (existsSync(file)) return readFile(file, 'utf8');
-  if (OFFLINE) return null;
-
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'glide-typing-trainer/0.1 (corpus builder)' },
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!res.ok) {
-      console.warn(`  ${res.status} ${url}`);
-      return null;
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    // Aozora mixes encodings: the work files are Shift_JIS, most index pages
-    // are UTF-8. Sniff the declared charset from the ASCII-safe prefix.
-    const head = new TextDecoder('latin1').decode(buf.subarray(0, 1024)).toLowerCase();
-    const charset = head.includes('shift_jis') || head.includes('shift-jis') ? 'shift_jis' : 'utf-8';
-    const text = new TextDecoder(charset).decode(buf);
-    await writeFile(file, text, 'utf8');
-    await sleep(120);
-    return text;
-  } catch (err) {
-    console.warn(`  ${url}: ${err.message}`);
-    return null;
-  }
-}
-
-const ENTITIES = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"' };
+const fetchText = (url, name) => fetchCached(url, name, OFFLINE);
 
 /** Folds ruby into the base text and strips Aozora's editorial markup. */
 function resolveRuby(html) {
@@ -171,38 +83,6 @@ function keepSentence(s) {
   return new Set(s).size >= 8;
 }
 
-/**
- * The body of the 奥付 div, matched by counting nesting rather than stopping at
- * the first `</div>`.
- *
- * That distinction is not academic: a ※ note in the 奥付 sometimes quotes a long
- * passage of the work, and 青空文庫 wraps the quote in its own `<div>`. A lazy
- * `[\s\S]*?</div>` then ends at the quote's close, which is *before* the 入力 and
- * 校正 lines — 宮沢賢治's 種山ヶ原 lost its credits exactly this way.
- */
-function biblioBlock(html) {
-  const open = '<div class="bibliographical_information">';
-  const start = html.indexOf(open);
-  if (start < 0) return null;
-
-  const from = start + open.length;
-  let depth = 1;
-  const tag = /<(\/?)div\b/g;
-  tag.lastIndex = from;
-  for (let m = tag.exec(html); m; m = tag.exec(html)) {
-    depth += m[1] ? -1 : 1;
-    if (depth === 0) return html.slice(from, m.index);
-  }
-  // unbalanced markup: the 奥付 is the last thing on the page, so take the rest
-  return html.slice(from);
-}
-
-/**
- * Pulls the 奥付 out of a work page: the 底本 it was transcribed from and the
- * volunteers who typed and proofread it. 青空文庫 asks that these travel with
- * any redistribution of the text, and this builder is a redistribution, so the
- * credits go into ja.json and from there into NOTICE.md.
- */
 function bibliography(html) {
   const body = biblioBlock(html);
   if (!body) return {};

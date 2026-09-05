@@ -4,6 +4,18 @@ import { corpusCharset, createStream, listSources } from '../src/core/corpus';
 import { PHYS_KEYS, physKey } from '../src/core/keyboard-geometry';
 import { charFor, charIndex, getLayout, keyLabel, LAYOUTS, resolveChar } from '../src/core/layouts';
 
+/**
+ * `next()` returns null only when an ordered work runs out. Every source here is
+ * endless, so a null is a bug worth failing on rather than a `!` worth writing.
+ */
+type Stream = ReturnType<typeof createStream>;
+const nextOf = (stream: Stream) => {
+  const passage = stream.next();
+  if (!passage) throw new Error(`${stream.id} ran out, but only an ordered work does that`);
+  return passage;
+};
+
+
 describe('layouts', () => {
   it('maps the same 48 physical keys in every layout', () => {
     for (const layout of LAYOUTS) {
@@ -83,7 +95,7 @@ describe('corpus', () => {
     for (const id of ['prose', 'drill-home', 'drill-bigrams', 'code']) {
       const stream = createStream(id, 'dvorak');
       for (let i = 0; i < 20; i++) {
-        const passage = stream.next();
+        const passage = nextOf(stream);
         expect(passage.text.length, id).toBeGreaterThan(8);
         expect(passage.text.endsWith(' '), id).toBe(true);
         expect(passage.attribution.title.length, id).toBeGreaterThan(0);
@@ -94,7 +106,7 @@ describe('corpus', () => {
   it('keeps home-row drills on the layout home row', () => {
     const stream = createStream('drill-home', 'dvorak');
     const allowed = new Set('aoeuidhtns- ');
-    const text = Array.from({ length: 12 }, () => stream.next().text).join('');
+    const text = Array.from({ length: 12 }, () => nextOf(stream).text).join('');
     const stray = [...text].filter((c) => !allowed.has(c));
     expect(stray).toEqual([]);
   });
