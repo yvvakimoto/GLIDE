@@ -301,25 +301,28 @@ export class Runner {
 
   /**
    * Ordered sources only: where the cursor sits in the work. `offset` is
-   * characters into the current chunk, so a bookmark can round it down to the
-   * chunk boundary — the only offset a builder guarantees is a unit boundary.
+   * characters into the current *chunk*, not into the segment — a run resumed
+   * part-way in has a first segment that starts inside its chunk, and a
+   * bookmark written from a segment-relative offset would creep backwards a
+   * sentence every time it was resumed.
    */
   get mark(): { chunk: number; offset: number; chars: number; total: number } | undefined {
     const total = this.stream.total;
     if (total === undefined) return undefined;
     const seg = this.segment();
     if (!seg?.at) return undefined;
-    const offset = this.cursor - seg.start;
-    return { chunk: seg.at.chunk, offset, chars: seg.at.chars + offset, total };
+    const into = this.cursor - seg.start;
+    return { chunk: seg.at.chunk, offset: seg.at.offset + into, chars: seg.at.chars + into, total };
   }
 
   /**
-   * Ordered sources: rebuild the buffer starting at `chunk`. A shuffle has no
-   * seek, so this is a plain reset for one — deliberately, because re-shuffling
-   * the bag on every restart is the thing the bag exists to avoid.
+   * Ordered sources: rebuild the buffer starting at `chunk`, `offset`
+   * characters into it. A shuffle has no seek, so this is a plain reset for one
+   * — deliberately, because re-shuffling the bag on every restart is the thing
+   * the bag exists to avoid.
    */
-  seek(chunk: number): void {
-    this.stream.seek?.(chunk);
+  seek(chunk: number, offset = 0): void {
+    this.stream.seek?.(chunk, offset);
     this.reset();
   }
 

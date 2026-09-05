@@ -12,17 +12,27 @@
  * in `resumeAt`, called once the body has landed — the equivalent of
  * settings.ts's source check for a value whose bound arrives later.
  *
- * The granularity is a chunk, rounded down: stop half-way through a paragraph
- * and the next session starts at the top of it. A character offset is not safe
- * to resume from — it can land inside a unit, half-way through romaji きゃ, and
- * chunk boundaries are the only offsets a builder guarantees are unit
- * boundaries. Re-typing a paragraph is the ritual, not a bug, so the UI says
- * which paragraph it is resuming rather than hiding it.
+ * What is stored is exactly where you stopped: a chunk and a character offset
+ * into it. The *rounding* happens at resume, in `resumePoint` (works.ts), which
+ * backs the offset up to the top of the sentence you were in. Keeping the raw
+ * offset here rather than a rounded one is deliberate — the rounding rule can
+ * change without every stored bookmark meaning something slightly wrong.
+ *
+ * An arbitrary character offset is not safe to resume from: it can land inside
+ * a unit, half-way through romaji きゃ. A sentence start is, because a sentence
+ * begins after terminating punctuation and no unit spans that. Chunk starts are
+ * the other safe offsets, which is what an offset of 0 falls back to.
  */
 
 /** A work's place. `chunk` is the NEXT chunk to type, not the last one done. */
 export type Bookmark = {
   chunk: number;
+  /**
+   * Characters into `chunk` where the reader stopped, unrounded. `resumePoint`
+   * rounds it back to a sentence start; nothing else may treat it as a place to
+   * start typing from.
+   */
+  offset: number;
   /** furthest chunk ever reached, so jumping back does not erase the trail */
   furthest: number;
   /** characters of the work typed through, for the readout */
@@ -50,6 +60,7 @@ export const MAX_WORKS = 24;
 
 export const emptyBookmark = (stamp = ''): Bookmark => ({
   chunk: 0,
+  offset: 0,
   furthest: 0,
   chars: 0,
   typed: 0,
@@ -67,6 +78,7 @@ function validBookmark(raw: unknown): Bookmark | undefined {
   const chunk = nat(r.chunk, 0);
   return {
     chunk,
+    offset: nat(r.offset, 0),
     furthest: Math.max(chunk, nat(r.furthest, chunk)),
     chars: nat(r.chars, 0),
     typed: nat(r.typed, 0),
@@ -135,6 +147,11 @@ export function saveBookmark(workId: string, patch: Partial<Bookmark>): Progress
   const before = store.works[workId] ?? emptyBookmark();
   const next: Bookmark = { ...before, ...patch };
   next.chunk = Math.max(0, Math.floor(next.chunk));
+  // An offset only means anything inside the chunk it was measured in. A writer
+  // that moves the chunk without saying where in it — a chapter jump, a restart
+  // — means the top of that chunk, not wherever the last one was left.
+  next.offset =
+    patch.chunk !== undefined && patch.offset === undefined ? 0 : nat(next.offset, 0);
   next.furthest = Math.max(next.furthest, next.chunk);
   next.at = patch.at ?? Date.now();
   store.works[workId] = next;

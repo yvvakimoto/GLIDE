@@ -16,6 +16,7 @@
  */
 
 import type { Script } from './method';
+import { resumeAt, type Bookmark } from './progress';
 
 /** One chunk is one thing to type in a sitting's rhythm — a paragraph, or a slice of one. */
 export type Chunk = {
@@ -46,9 +47,9 @@ export type Work = {
   offsets: readonly number[];
   chars: number;
   /**
-   * Hash of the chunking. A rebuild that re-cuts chunks must change this, because
-   * a bookmark is a chunk index and nothing else can tell that it now points
-   * somewhere different in the same book.
+   * Hash of the chunking. A rebuild that re-cuts chunks must change this,
+   * because a bookmark is a chunk index and an offset into it, and nothing else
+   * can tell that the pair now points somewhere different in the same book.
    */
   stamp: string;
 };
@@ -198,4 +199,56 @@ export function loadWork(id: string): Promise<Work> {
     });
   inflight.set(id, promise);
   return promise;
+}
+
+/**
+ * Where a sentence begins inside a chunk. This is the resume granularity, and
+ * the definition of "sentence" is the builder's own: `chunkParagraph` in
+ * `scripts/build-shakyo.mjs` cuts an over-long paragraph at exactly these
+ * places, so a chunk that came out of that cut already starts at one.
+ *
+ * The latin half needs the trailing space, or `3.14` is two sentences. The
+ * fullwidth half does not, because Japanese prose has no spaces to require —
+ * `build-shakyo-ja.mjs` cuts at 。 for the same reason.
+ *
+ * An abbreviation ("Mr. Smith") reads as a sentence end here. The builder has
+ * the same blind spot, and all it costs is a resume that starts a few words
+ * further on than it strictly had to.
+ */
+const SENTENCE_END = /[.!?]+["'’”)\]]*\s+|[。！？]+[」』）]*/g;
+
+/**
+ * The start of the sentence containing `offset`. Landing exactly on a sentence
+ * start returns it unmoved, so a sentence you finished is not handed back.
+ */
+export function sentenceStart(text: string, offset: number): number {
+  let start = 0;
+  SENTENCE_END.lastIndex = 0;
+  for (let m = SENTENCE_END.exec(text); m; m = SENTENCE_END.exec(text)) {
+    const at = m.index + m[0].length;
+    // A chunk carries its own trailing separator, so the last sentence ends at
+    // text.length. Resuming there would seek past everything the chunk has.
+    if (at >= text.length || at > offset) break;
+    start = at;
+  }
+  return start;
+}
+
+/**
+ * Where a resumed run starts. The chunk is `resumeAt`'s clamp; the offset is
+ * the bookmark's exact stopping place rounded back to the top of its sentence.
+ *
+ * The offset is dropped whenever the chunk it was measured in is not the chunk
+ * about to be typed — a work that shrank in a rebuild, or a `stale` bookmark
+ * whose chunking has been re-cut underneath it. An offset into text that is no
+ * longer the same text is worse than no offset at all.
+ */
+export function resumePoint(
+  mark: Bookmark & { stale?: boolean },
+  work: Work,
+): { chunk: number; offset: number } {
+  const chunk = resumeAt(mark, work.chunks.length);
+  const text = work.chunks[chunk]?.t;
+  if (mark.stale || chunk !== mark.chunk || !text) return { chunk, offset: 0 };
+  return { chunk, offset: sentenceStart(text, Math.min(mark.offset, text.length)) };
 }

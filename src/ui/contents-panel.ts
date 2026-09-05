@@ -14,7 +14,7 @@
  */
 
 import type { Bookmark } from '../core/progress';
-import type { Work, WorkMeta } from '../core/works';
+import { resumePoint, type Work, type WorkMeta } from '../core/works';
 import { el } from './dom';
 
 export type WorkLoadState =
@@ -183,8 +183,16 @@ function chapterRows(opts: ContentsPanelOptions): HTMLElement[] {
 
 function footNote(opts: ContentsPanelOptions): string {
   if (!opts.meta) return 'pick a work to begin';
-  const chunk = opts.bookmark?.chunk ?? 0;
-  const where = chunk === 0 ? 'from the beginning' : `at paragraph ${chunk + 1}`;
+  // Only the body can say whether the place rounds back to the top of its
+  // paragraph or to a sentence inside it, so before it lands this says the
+  // paragraph and nothing finer.
+  const point = opts.work && opts.bookmark ? resumePoint(opts.bookmark, opts.work) : undefined;
+  const chunk = point?.chunk ?? opts.bookmark?.chunk ?? 0;
+  const where = point?.offset
+    ? `part-way into paragraph ${chunk + 1}`
+    : chunk === 0
+      ? 'from the beginning'
+      : `at paragraph ${chunk + 1}`;
   const length = opts.duration > 0 ? `${opts.duration}s` : 'open';
   return `space resumes ${where}  ·  run time: ${length}`;
 }

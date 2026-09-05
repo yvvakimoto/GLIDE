@@ -254,14 +254,28 @@ nothing about rendering.
   the phase*, so a finished work would sit in `running` with every key dead and
   the clock going. `advance()` completes the run, which is why `EndReason` has a
   third value, `'end'`. Anything new that consumes a stream has to handle both.
-- **A bookmark is a chunk index, rounded down.** Stop half-way through a
-  paragraph and the next sitting starts at the top of it. A character offset is
-  not safe to resume from — it can land inside a unit, half-way through romaji
-  きゃ — and chunk boundaries are the only offsets a builder can promise are unit
-  boundaries. Re-typing a paragraph is the ritual, so the UI says which paragraph
-  it is resuming rather than hiding it. The place is written where a run ends, on
-  a chunk boundary at most every few seconds, and on `pagehide` — never per
-  keystroke. Note that the end-of-run write happens *twice* (the run, then
+- **A bookmark stores where you stopped; the rounding happens at resume.** The
+  stored place is a chunk plus a raw character offset into it, and
+  `resumePoint` (`works.ts`) is the only thing allowed to turn that into a
+  place to start typing — it backs the offset up to the top of the sentence you
+  were in. Rounding at read time rather than at write time is what lets the
+  rounding rule change without every stored bookmark meaning something slightly
+  wrong, and it is the same shape as `resumeAt`'s clamp: a bound that only
+  arrives with the body. An *arbitrary* character offset is still not safe to
+  resume from — it can land inside a unit, half-way through romaji きゃ — but a
+  sentence start is, because a sentence begins after terminating punctuation and
+  no unit spans that. `sentenceStart` is the builder's own definition of a
+  sentence (`chunkParagraph` in `build-shakyo.mjs` cuts long paragraphs at
+  exactly those places), which is why it is derived at runtime instead of baked
+  into the data: re-cutting chunks would change every work's `stamp` and make
+  every bookmark stale. An offset means nothing outside the chunk it was
+  measured in, so `saveBookmark` drops it whenever a writer moves `chunk`
+  without saying where in it — a chapter jump — and `resumePoint` drops it when
+  the bookmark is `stale` or the chunk had to step back. The place is written
+  where a run ends, on a new sentence at most every few seconds, and on
+  `pagehide` — never per keystroke; the tick path checks the throttle *before*
+  scanning for the sentence, because that scan walks a chunk and it runs from
+  the frame loop. Note that the end-of-run write happens *twice* (the run, then
   `pagehide`) with the stats still holding the run's characters, so a sitting is
   counted once by a flag, not by the write.
 - **A work's body is fetched, so `source` cannot name one synchronously.**

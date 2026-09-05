@@ -16,7 +16,6 @@ import {
   clearAllProgress,
   clearBookmark,
   loadProgress,
-  resumeAt,
   saveBookmark,
   type Bookmark,
   type ProgressStore,
@@ -27,6 +26,8 @@ import {
   isWorkId,
   listWorks,
   loadWork,
+  resumePoint,
+  sentenceStart,
   type Work,
   type WorkMeta,
 } from './core/works';
@@ -135,6 +136,8 @@ let progress: ProgressStore = loadProgress();
 let currentWorkId: string | undefined = storedWork;
 /** The chunk last written to the bookmark, so the per-frame check is a comparison. */
 let savedChunk = -1;
+/** The sentence start last written, so the mid-run write fires once per sentence. */
+let savedOffset = 0;
 let lastBookmarkAt = -Infinity;
 /**
  * Whether this run has already been counted as a sitting. `saveMark('end')` runs
@@ -207,13 +210,22 @@ function activeBookmark(): (Bookmark & { stale: boolean }) | undefined {
   return meta ? bookmarkOf(progress, meta.id, meta.stamp) : undefined;
 }
 
+/**
+ * Puts the runner at the bookmark for `work` — the sentence it was left in, not
+ * the top of the paragraph — and remembers where that was for the tick gate.
+ */
+function seekToBookmark(work: Work): void {
+  const point = resumePoint(bookmarkOf(progress, work.id, work.stamp), work);
+  savedChunk = point.chunk;
+  savedOffset = point.offset;
+  runner.seek(point.chunk, point.offset);
+}
+
 /** Puts the runner at the bookmark for the current work. A shuffle has none. */
 function resumeBookmark(): void {
   const work = activeWork();
   if (!work || settings.source !== work.id) return;
-  const mark = bookmarkOf(progress, work.id, work.stamp);
-  savedChunk = resumeAt(mark, work.chunks.length);
-  runner.seek(savedChunk);
+  seekToBookmark(work);
 }
 
 /**
@@ -244,18 +256,27 @@ async function selectWork(id: string): Promise<void> {
 
 /**
  * Writes the place. `end` also counts the sitting; `tick` is the cheap
- * per-frame path and only fires on a chunk boundary, at most every few seconds.
+ * per-frame path and only fires on a new sentence, at most every few seconds.
+ *
+ * The throttle is checked before the sentence scan and not after: the scan
+ * walks a chunk, and this runs from the frame loop. That order caps it at one
+ * walk every BOOKMARK_THROTTLE_MS.
  */
 function saveMark(reason: 'tick' | 'end'): void {
   const work = activeWork();
   const mark = runner.mark;
   if (!work || !mark) return;
   const now = performance.now();
-  if (reason === 'tick') {
-    if (mark.chunk === savedChunk) return;
-    if (now - lastBookmarkAt < BOOKMARK_THROTTLE_MS) return;
-  }
-  const patch: Partial<Bookmark> = { chunk: mark.chunk, chars: mark.chars, stamp: work.stamp };
+  if (reason === 'tick' && now - lastBookmarkAt < BOOKMARK_THROTTLE_MS) return;
+  // Where a resume would land, which is the thing worth writing again.
+  const here = sentenceStart(work.chunks[mark.chunk]?.t ?? '', mark.offset);
+  if (reason === 'tick' && mark.chunk === savedChunk && here === savedOffset) return;
+  const patch: Partial<Bookmark> = {
+    chunk: mark.chunk,
+    offset: mark.offset,
+    chars: mark.chars,
+    stamp: work.stamp,
+  };
   if (reason === 'end' && !runCounted) {
     const typed = runner.stats.producedChars;
     if (typed > 0) {
@@ -266,6 +287,7 @@ function saveMark(reason: 'tick' | 'end'): void {
     }
   }
   savedChunk = mark.chunk;
+  savedOffset = here;
   lastBookmarkAt = now;
   progress = saveBookmark(work.id, patch);
 }
@@ -278,10 +300,12 @@ function jumpToChapter(index: number): void {
   // inside saveBookmark, so the trail of what you have been through survives.
   progress = saveBookmark(work.id, {
     chunk: chapter.start,
+    offset: 0,
     chars: work.offsets[chapter.start] ?? 0,
     stamp: work.stamp,
   });
   savedChunk = chapter.start;
+  savedOffset = 0;
   runner.seek(chapter.start);
   textView.sync(runner.text, runner.cursor);
   boardDirty = true;
@@ -293,6 +317,7 @@ function restartWork(): void {
   if (!work) return;
   progress = clearBookmark(work.id);
   savedChunk = 0;
+  savedOffset = 0;
   runner.seek(0);
   textView.sync(runner.text, runner.cursor);
   boardDirty = true;
@@ -341,9 +366,7 @@ function renderContents(): void {
 function restartRun(now: number): void {
   const work = activeWork();
   if (work && settings.source === work.id) {
-    const mark = bookmarkOf(progress, work.id, work.stamp);
-    savedChunk = resumeAt(mark, work.chunks.length);
-    runner.seek(savedChunk);
+    seekToBookmark(work);
   } else {
     runner.reset();
   }
@@ -697,6 +720,7 @@ function exposeDevHooks(): void {
         // -1 means the last chunk, so a test can reach the end of a long work
         const chunk = n < 0 ? Math.max(0, work.chunks.length + n) : n;
         savedChunk = chunk;
+        savedOffset = 0;
         runner.seek(chunk);
         textView.sync(runner.text, runner.cursor);
         return true;
@@ -704,6 +728,7 @@ function exposeDevHooks(): void {
       clearProgress: () => {
         progress = clearAllProgress();
         savedChunk = -1;
+        savedOffset = 0;
       },
       /** the presses that type `char` under the active method */
       pressesFor: (char: string) => {

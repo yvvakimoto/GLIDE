@@ -41,8 +41,12 @@ export type Attribution = {
 export type Passage = {
   text: string;
   attribution: Attribution;
-  /** ordered sources only: where this passage sits in the work */
-  at?: { chunk: number; chars: number };
+  /**
+   * ordered sources only: where this passage sits in the work. `offset` is
+   * where it starts inside its chunk — 0 except for the first passage after a
+   * seek that resumed part-way in — and `chars` already counts it.
+   */
+  at?: { chunk: number; chars: number; offset: number };
 };
 
 export type TextStream = {
@@ -59,8 +63,12 @@ export type TextStream = {
    * to give has to be able to say so or the loop never ends.
    */
   next(): Passage | null;
-  /** ordered sources only: restart emission at `chunk` */
-  seek?(chunk: number): void;
+  /**
+   * ordered sources only: restart emission at `chunk`, `offset` characters in.
+   * The offset applies to the first passage only, and it is the caller's job to
+   * have put it on a unit boundary — see `resumePoint` in works.ts.
+   */
+  seek?(chunk: number, offset?: number): void;
 };
 
 type Book = {
@@ -328,6 +336,8 @@ function makeJaDrill(id: string): TextStream {
  */
 function makeWorkStream(work: Work): TextStream {
   let chunk = 0;
+  /** characters to drop off the front of the next passage; spent once. */
+  let skip = 0;
   const attribution: Attribution = {
     title: work.title,
     author: work.author,
@@ -338,15 +348,22 @@ function makeWorkStream(work: Work): TextStream {
     label: work.title,
     script: work.script,
     total: work.chars,
-    seek: (n) => {
+    seek: (n, offset = 0) => {
       chunk = Math.min(Math.max(0, Math.floor(n)), work.chunks.length);
+      // A skip of the whole chunk would emit an empty passage, which puts a
+      // zero-width segment in the runner's buffer for no gain; that is the top
+      // of the *next* chunk anyway, and seeking there is the caller's business.
+      const length = work.chunks[chunk]?.t.length ?? 0;
+      skip = Math.min(Math.max(0, Math.floor(offset)), Math.max(0, length - 1));
     },
     next: () => {
       const entry = work.chunks[chunk];
       if (!entry) return null;
-      const at = { chunk, chars: work.offsets[chunk] ?? 0 };
+      const at = { chunk, chars: (work.offsets[chunk] ?? 0) + skip, offset: skip };
+      const text = skip ? entry.t.slice(skip) : entry.t;
+      skip = 0;
       chunk++;
-      return { text: entry.t, attribution, at };
+      return { text, attribution, at };
     },
   };
 }
