@@ -102,7 +102,7 @@ const STORAGE_KEY = 'dvorak-trainer/settings/v1';
  * `source` may name something that no longer exists. An unvalidated value walks
  * straight into the runner, so adding a setting means adding a line here.
  */
-const LAYOUT_IDS: ReadonlySet<string> = new Set(LAYOUTS.map((l) => l.id));
+export const LAYOUT_IDS: ReadonlySet<string> = new Set(LAYOUTS.map((l) => l.id));
 const SOURCE_IDS: ReadonlySet<string> = new Set(listSources().map((s) => s.id));
 const LABEL_MODES: readonly LabelMode[] = ['layout', 'physical', 'blank'];
 const BOOLEANS = [

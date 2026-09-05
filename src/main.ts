@@ -9,7 +9,8 @@ import './style/fonts-ja.css';
 import './style/app.css';
 
 import { corpusCharset } from './core/corpus';
-import { Runner } from './core/engine';
+import { Runner, type EndReason } from './core/engine';
+import { recordRun, rowOf, type RunEnd } from './core/history';
 import { physKey } from './core/keyboard-geometry';
 import { buildUnits, keyLabels, methodCharset, methodKind, type KeyLabel, type MethodSpec } from './core/method';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './core/settings';
@@ -163,17 +164,26 @@ window.addEventListener('keyup', (event) => {
   if (runner.handleKeyup(event, performance.now())) event.preventDefault();
 });
 
+/** A run is only ever finished by the timer or by the typist. */
+const endOf = (reason: EndReason): RunEnd => (reason === 'time' ? 'time' : 'quit');
+
 runner.onPhase = (phase, previous) => {
   boardDirty = true;
   if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) board.reset();
   if (phase === 'finished') {
     finishedAt = performance.now();
+    const summary = runner.summary(summaryLegend());
+    // Record before rendering, so the chart's last point is the run you just did.
+    const run = rowOf(summary, settings, runner.method.script, endOf(runner.endReason));
+    const history = recordRun(run);
     renderSummary({
       root: summaryRoot,
-      summary: runner.summary(summaryLegend()),
+      summary,
       settings,
       spec: runner.method,
       quit: runner.endReason === 'quit',
+      history,
+      run,
     });
   }
 };

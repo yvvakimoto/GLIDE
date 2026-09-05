@@ -1,3 +1,5 @@
+import { renderScale } from '../render/quality';
+
 export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing element #${id}`);
@@ -41,3 +43,31 @@ export function setOpen(node: HTMLElement, open: boolean): void {
   const value = open ? 'true' : 'false';
   if (node.dataset.open !== value) node.dataset.open = value;
 }
+
+/**
+ * Sizes a canvas to its laid-out box at the capped device pixel ratio and hands
+ * back a context already scaled to CSS pixels, so callers draw in CSS units.
+ * Call it after layout has settled — every caller does so from a trailing
+ * requestAnimationFrame.
+ */
+export function fitCanvas(
+  canvas: HTMLCanvasElement,
+): { ctx: CanvasRenderingContext2D; w: number; h: number } | undefined {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = renderScale();
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return undefined;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+/** One labelled figure in a `.cards` grid. */
+export const card = (label: string, value: string, unit?: string): HTMLElement =>
+  el('div', { class: 'card' }, [
+    el('div', { class: 'k', text: label }),
+    el('div', { class: 'v' }, [value, unit ? el('small', { text: ` ${unit}` }) : null]),
+  ]);

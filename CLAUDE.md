@@ -93,6 +93,7 @@ The flow, and the file to look in:
 | keyboard events -> presses; simultaneous detection | `src/core/input.ts` |
 | run state machine, cursor, matching, keystroke log, `cuePlan` | `src/core/engine.ts` |
 | speed series, moving average, summary aggregates | `src/core/stats.ts` |
+| the run log: one row per run, and what makes two runs comparable | `src/core/history.ts` |
 | the look-ahead ribbon | `src/render/guide.ts` |
 | keycaps, finger colours, press bloom, heatmap | `src/render/keyboard.ts` |
 | the hand schematics | `src/render/hands.ts` |
@@ -246,6 +247,22 @@ nothing about rendering.
   the defaults and must be range-checked or they silently break behaviour. This got
   sharper with deployment: `localStorage` is keyed by *origin*, not path, so on a
   `user.github.io` the key is shared with every other page hosted there.
+- **There are two localStorage keys, and they answer a bad value differently.**
+  `settings/v1` *repairs* an out-of-range value to its default; `history/v1`
+  (`src/core/history.ts`) *drops* the row. There is no correct fallback for a
+  wrong speed — a repaired 0 wpm is as much a lie as the garbage it replaced —
+  and unlike a setting, which the next write overwrites, a bad row stays in the
+  log poisoning the mean and the personal best for ever. A third store should
+  pick whichever of the two rules fits, deliberately.
+- **A run has one floor, not two.** `worthKeeping` (`history.ts`) admits a run at
+  10 seconds and 25 characters; below that a two-second blur-abort scores several
+  hundred wpm, because `INSTANT_WINDOW_MS` is 1500 and `wpmOf` divides by
+  elapsed. A *second*, higher bar for the personal best was tried and removed: a
+  15 s run whose clock stops at 14.98 s was then recorded, charted and counted in
+  the mean while silently not counting as a best, which reads on screen as the
+  best being broken. The summary panel says out loud when a run fell below the
+  floor, because otherwise it shows a `vs previous` for a run that is not in
+  `runs`.
 - **The Japanese author list is bounded by a 1945 death year**, and that is a
   licensing constraint, not a taste one. 青空文庫 publishes what is public domain
   *in Japan*; the site is hosted in the US, where the URAA restored copyright in

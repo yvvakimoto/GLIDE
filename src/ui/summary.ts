@@ -13,8 +13,9 @@ import type { Summary } from '../core/stats';
 import { drawChart } from '../render/chart';
 import { boardMetrics, drawKeyboard } from '../render/keyboard';
 import { rgba, speedRgb } from '../render/color';
-import { renderScale } from '../render/quality';
-import { el } from './dom';
+import type { HistoryRow } from '../core/history';
+import { card, el, fitCanvas } from './dom';
+import { historyPanel } from './history-panel';
 
 export type SummaryContext = {
   root: HTMLElement;
@@ -22,22 +23,13 @@ export type SummaryContext = {
   settings: Settings;
   spec: MethodSpec;
   quit: boolean;
+  /** the whole run log, oldest first, already including this run if it was kept */
+  history: readonly HistoryRow[];
+  /** this run as a log row, so the panel can place it among the others */
+  run: HistoryRow;
 };
 
 type HeatMode = 'errors' | 'speed';
-
-function fitCanvas(canvas: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; w: number; h: number } | undefined {
-  const rect = canvas.getBoundingClientRect();
-  const dpr = renderScale();
-  const w = Math.max(1, Math.round(rect.width));
-  const h = Math.max(1, Math.round(rect.height));
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return undefined;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { ctx, w, h };
-}
 
 function heatMap(summary: Summary, mode: HeatMode): Map<string, number> {
   const heat = new Map<string, number>();
@@ -64,12 +56,6 @@ function heatMap(summary: Summary, mode: HeatMode): Map<string, number> {
 
 const perMinute = (count: number, seconds: number): number => Math.round((count / Math.max(1, seconds)) * 60);
 
-const card = (label: string, value: string, unit?: string): HTMLElement =>
-  el('div', { class: 'card' }, [
-    el('div', { class: 'k', text: label }),
-    el('div', { class: 'v' }, [value, unit ? el('small', { text: ` ${unit}` }) : null]),
-  ]);
-
 export function renderSummary(ctx: SummaryContext): void {
   const { summary, settings } = ctx;
   const lite = settings.graphics === 'lite';
@@ -78,6 +64,13 @@ export function renderSummary(ctx: SummaryContext): void {
 
   const chartCanvas = el('canvas') as HTMLCanvasElement;
   const heatCanvas = el('canvas') as HTMLCanvasElement;
+
+  const history = historyPanel({
+    rows: ctx.history,
+    current: ctx.run,
+    settings,
+    lite,
+  });
   let heatMode: HeatMode = 'errors';
 
   const drawHeat = (): void => {
@@ -211,6 +204,8 @@ export function renderSummary(ctx: SummaryContext): void {
       el('div', { class: 'chart-wrap' }, [chartCanvas]),
     ]),
 
+    history.node,
+
     el('div', { class: 'two-col' }, [
       el('div', { class: 'panel-block' }, [
         el('h3', {}, [
@@ -272,5 +267,6 @@ export function renderSummary(ctx: SummaryContext): void {
   requestAnimationFrame(() => {
     drawSpeed();
     drawHeat();
+    history.draw();
   });
 }
