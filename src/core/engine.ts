@@ -78,7 +78,7 @@ export type PressCue = {
   label: string;
 };
 
-const COUNT_IN_STEP_MS = 380;
+const COUNT_IN_STEP_MS = 600;
 const COUNT_IN_STEPS = 3;
 /** keep this much text queued ahead of the cursor */
 const BUFFER_AHEAD = 700;
@@ -231,6 +231,18 @@ export class Runner {
   get countInNumber(): number {
     const step = Math.floor((this.now - this.phaseStartedAt) / COUNT_IN_STEP_MS);
     return Math.max(1, COUNT_IN_STEPS - step);
+  }
+
+  /**
+   * 3, 2, 1 — the run's own ending, announced while it is still being typed.
+   * 0 means paint nothing: an untimed run has no ending to announce, and the
+   * phase test is what wipes the number the instant the run stops.
+   */
+  get countOutNumber(): number {
+    const remaining = this.remainingMs;
+    if (this.phase !== 'running' || remaining === null) return 0;
+    const n = Math.ceil(remaining / 1000);
+    return n >= 1 && n <= COUNT_IN_STEPS ? n : 0;
   }
 
   get elapsedMs(): number {

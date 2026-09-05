@@ -76,11 +76,21 @@ const overlays = {
   settings: byId('overlay-settings'),
 };
 const countNumber = byId('count-number');
+const countOut = byId('count-out');
 const summaryRoot = byId('summary');
 const settingsRoot = byId('settings');
 
+/**
+ * A run ends in the middle of a keystroke: the space the typist was already
+ * reaching for lands a few milliseconds after the summary has opened. For that
+ * long the summary answers to nothing at all.
+ */
+const SUMMARY_GUARD_MS = 600;
+
 let settingsOpen = false;
 let lastCountNumber = 0;
+let lastCountOut = 0;
+let finishedAt = -Infinity;
 /** the board is redrawn on demand outside a run; see `frame` */
 let boardDirty = true;
 
@@ -157,6 +167,7 @@ runner.onPhase = (phase, previous) => {
   boardDirty = true;
   if (phase === 'countin' || (phase === 'running' && previous !== 'countin')) board.reset();
   if (phase === 'finished') {
+    finishedAt = performance.now();
     renderSummary({
       root: summaryRoot,
       summary: runner.summary(summaryLegend()),
@@ -188,10 +199,35 @@ window.addEventListener('keydown', (event) => {
   const isThumbKey =
     kana && (event.code === settings.thumbLeft || event.code === settings.thumbRight);
 
+  // The summary owns every key while it is up. `space` used to run again from
+  // here, and it is exactly the key the typist was mid-word on when the clock
+  // ran out — the summary was being dismissed by the run that produced it. So
+  // the shortcuts are `esc` and `tab` alone, and for the first moments even
+  // those are dead, because the tail of the run's own typing is still arriving.
+  if (runner.phase === 'finished') {
+    const guarded = now - finishedAt < SUMMARY_GUARD_MS;
+    if (!isThumbKey && event.key === 'Escape') {
+      event.preventDefault();
+      if (!guarded) runner.reset();
+      return;
+    }
+    if (!isThumbKey && event.key === 'Tab') {
+      event.preventDefault();
+      if (!guarded) {
+        runner.reset();
+        board.reset();
+        runner.beginCountIn(now);
+      }
+      return;
+    }
+    // everything else dies here; space would otherwise scroll the overlay
+    if (event.code === 'Space') event.preventDefault();
+    return;
+  }
+
   if (!isThumbKey && event.key === 'Escape') {
     event.preventDefault();
     if (runner.phase === 'running' || runner.phase === 'countin') runner.abort(now);
-    else if (runner.phase === 'finished') runner.reset();
     return;
   }
 
@@ -203,7 +239,7 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  const idle = runner.phase === 'idle' || runner.phase === 'finished';
+  const idle = runner.phase === 'idle';
 
   if (idle && event.code === 'Space' && !event.altKey) {
     event.preventDefault();
@@ -325,6 +361,15 @@ function frame(): void {
     }
   } else {
     lastCountNumber = 0;
+  }
+
+  const out = runner.countOutNumber;
+  if (out !== lastCountOut) {
+    lastCountOut = out;
+    countOut.textContent = out ? String(out) : '';
+    countOut.classList.remove('tick');
+    void countOut.offsetWidth;
+    if (out) countOut.classList.add('tick');
   }
 
   textView.update(runner.text, runner.states, runner.cursor, runner.cuePlan(settings.lookahead), {

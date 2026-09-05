@@ -68,7 +68,7 @@ async function main() {
   await page.keyboard.press('Space');
   await wait(180);
   await shot('03-countin');
-  await wait(1100);
+  await wait(1700);
 
   // type correctly, at a human-ish pace
   const typed = [];
@@ -169,7 +169,7 @@ async function main() {
 
   // finish early
   await page.keyboard.press('Escape');
-  await wait(700);
+  await wait(900);
   await shot('07-summary');
 
   const end = await page.evaluate(() => window.__glide.snapshot());
@@ -180,7 +180,7 @@ async function main() {
   await page.evaluate(() => window.__glide.applySettings({ layout: 'colemak', lookahead: 3, labelMode: 'blank' }));
   await wait(300);
   await page.keyboard.press('Space');
-  await wait(1500);
+  await wait(1900);
   for (let i = 0; i < 24; i++) {
     if (!(await pressNext(page))) break;
     await wait(55);
@@ -206,7 +206,7 @@ async function main() {
   }
   await shot('21-rich-running');
   await page.keyboard.press('Escape');
-  await wait(700);
+  await wait(900);
   await shot('22-rich-summary');
   await page.keyboard.press('Escape');
   await wait(300);
@@ -264,7 +264,7 @@ async function main() {
     );
     await wait(250);
     await page.keyboard.press('Space');
-    await wait(1400);
+    await wait(1900);
     for (let i = 0; i < 46; i++) {
       if (!(await pressNext(page))) break;
       await wait(50);
@@ -302,15 +302,32 @@ async function main() {
     }
   }
 
-  // advance mode: a miss is marked and the cursor keeps going
+  // advance mode: a miss is marked and the cursor keeps going.
+  // The kana passes leave `source: 'ja'` and Space assigned as a thumb key, so
+  // this one has to put the method and the thumbs back before Space can mean
+  // "start" again — and the first Escape only ends the run, the second leaves
+  // the summary it raised.
+  await page.keyboard.press('Escape');
+  await wait(900);
   await page.keyboard.press('Escape');
   await wait(250);
   await page.evaluate(() =>
-    window.__glide.applySettings({ layout: 'dvorak', lookahead: 6, labelMode: 'layout', errorMode: 'advance', duration: 15 }),
+    window.__glide.applySettings({
+      source: 'prose',
+      layout: 'dvorak',
+      lookahead: 6,
+      labelMode: 'layout',
+      errorMode: 'advance',
+      duration: 15,
+      thumbLeft: 'NonConvert',
+      thumbRight: 'Convert',
+    }),
   );
   await wait(200);
   await page.keyboard.press('Space');
-  await wait(1400);
+  await wait(1900);
+  const advanceStart = await page.evaluate(() => window.__glide.runner.phase);
+  if (advanceStart !== 'running') throw new Error(`advance pass did not start: ${advanceStart}`);
 
   const beforeMiss = await page.evaluate(() => window.__glide.snapshot().cursor);
   await page.keyboard.press('Digit9');
@@ -321,16 +338,43 @@ async function main() {
   }));
   await shot('09-advance-mode');
 
+  // the last three seconds announce themselves through the text; catch the "2"
+  await page.waitForFunction(() => window.__glide.runner.countOutNumber === 2, null, {
+    polling: 60,
+    timeout: 20_000,
+  });
+  await wait(140);
+  await shot('23-count-out');
+
   // let the 15s limit expire on its own
-  await wait(15_000);
+  await page.waitForFunction(() => window.__glide.runner.phase === 'finished', null, {
+    polling: 60,
+    timeout: 20_000,
+  });
   const expired = await page.evaluate(() => ({
     phase: window.__glide.runner.phase,
     reason: window.__glide.runner.endReason,
   }));
+
+  // The run ends mid-word, so the space already on its way must not dismiss the
+  // summary — neither inside the guard nor after it, since space no longer runs
+  // again at all. Only esc leaves, and only once the guard has lapsed.
+  await page.keyboard.press('Space');
+  await wait(120);
+  const insideGuard = await page.evaluate(() => window.__glide.runner.phase);
+  await wait(800);
+  await page.keyboard.press('Space');
+  await page.keyboard.press('s');
+  await wait(200);
+  const afterGuard = await page.evaluate(() => window.__glide.runner.phase);
   await shot('10-time-expired');
+  await page.keyboard.press('Escape');
+  await wait(250);
+  const afterEscape = await page.evaluate(() => window.__glide.runner.phase);
 
   console.log('advance:', JSON.stringify({ beforeMiss, afterMiss }));
   console.log('timer  :', JSON.stringify(expired));
+  console.log('summary:', JSON.stringify({ insideGuard, afterGuard, afterEscape }));
   console.log('typed:', typed.join(''));
   console.log('mid  :', JSON.stringify(mid));
   console.log('end  :', JSON.stringify(end));

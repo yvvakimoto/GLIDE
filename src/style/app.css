@@ -814,7 +814,7 @@ kbd {
 }
 
 .count-number.pop {
-  animation: pop 0.38s cubic-bezier(0.2, 0.9, 0.2, 1);
+  animation: pop 0.28s cubic-bezier(0.2, 0.9, 0.2, 1);
 }
 
 @keyframes pop {
@@ -828,6 +828,49 @@ kbd {
   to {
     transform: scale(1);
     opacity: 1;
+  }
+}
+
+/* count-out */
+
+/*
+ * The last three seconds, announced through the text rather than over it. The
+ * count-in can afford a full-screen dimmed overlay because nobody is typing
+ * yet; here the typing is at its densest, so the digit peaks at 18% and spends
+ * most of its second invisible — enough to catch in peripheral vision, never
+ * enough to hide a glyph. It lives in `.upper`, which is outside every
+ * `backdrop-filter` subtree, and moves only opacity and transform.
+ */
+.count-out {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: clamp(5rem, 16vw, 12rem);
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0;
+}
+
+.count-out.tick {
+  animation: count-out 1s ease-out;
+}
+
+@keyframes count-out {
+  from {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+  16% {
+    opacity: 0.18;
+  }
+  to {
+    opacity: 0;
+    transform: scale(1);
   }
 }
 

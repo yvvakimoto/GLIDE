@@ -264,9 +264,8 @@ export function renderSummary(ctx: SummaryContext): void {
     ]),
 
     el('div', { class: 'summary-foot' }, [
-      el('span', {}, [el('kbd', { text: 'space' }), 'run again']),
       el('span', {}, [el('kbd', { text: 'esc' }), 'menu']),
-      el('span', {}, [el('kbd', { text: 's' }), 'settings']),
+      el('span', {}, [el('kbd', { text: 'tab' }), 'run again']),
     ]),
   );
 

@@ -220,6 +220,44 @@ describe('Runner', () => {
   });
 });
 
+describe('count-out', () => {
+  /** Runs a 15s run up to `elapsed` and reads the number the text panel paints. */
+  const at = (elapsed: number, patch: Partial<Settings> = {}) => {
+    const runner = new Runner(settings({ duration: 15, ...patch }));
+    runner.startNow(0);
+    runner.tick(elapsed);
+    return runner;
+  };
+
+  it('says nothing until the last three seconds', () => {
+    expect(at(0).countOutNumber).toBe(0);
+    expect(at(11_999).countOutNumber).toBe(0);
+  });
+
+  it('counts 3, 2, 1 down to the limit', () => {
+    expect(at(12_000).countOutNumber).toBe(3);
+    expect(at(12_500).countOutNumber).toBe(3);
+    expect(at(13_000).countOutNumber).toBe(2);
+    expect(at(14_000).countOutNumber).toBe(1);
+    expect(at(14_999).countOutNumber).toBe(1);
+  });
+
+  it('clears itself the moment the run stops', () => {
+    const finished = at(15_000);
+    expect(finished.phase).toBe('finished');
+    expect(finished.countOutNumber).toBe(0);
+  });
+
+  it('has nothing to announce in an untimed run', () => {
+    expect(at(12_500, { duration: 0 }).countOutNumber).toBe(0);
+    expect(at(999_999, { duration: 0 }).countOutNumber).toBe(0);
+  });
+
+  it('says nothing before the run has begun', () => {
+    expect(new Runner(settings({ duration: 15 })).countOutNumber).toBe(0);
+  });
+});
+
 describe('Runner, Japanese', () => {
   /**
    * Most of these tests want a passage containing some particular thing — a
