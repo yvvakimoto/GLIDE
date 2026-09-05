@@ -21,6 +21,7 @@ npm test             # vitest, whole suite
 npm run build        # tsc --noEmit, then a production bundle
 npm run corpus       # rebuild the English corpus from Project Gutenberg
 npm run corpus:ja    # rebuild the Japanese corpus from 青空文庫
+npm run shakyo       # rebuild the 写経 works (whole books) from Project Gutenberg
 npm run notice       # regenerate NOTICE.md from the corpora — run after either corpus
 npm run perf         # frame-time probe against the dev server, see below
 npm run fonts:ja     # regenerate src/style/fonts-ja.css, the bundled kana subsets
@@ -94,6 +95,9 @@ The flow, and the file to look in:
 | run state machine, cursor, matching, keystroke log, `cuePlan` | `src/core/engine.ts` |
 | speed series, moving average, summary aggregates | `src/core/stats.ts` |
 | the run log: one row per run, and what makes two runs comparable | `src/core/history.ts` |
+| 写経 works: the bundled index, and the lazily-fetched bodies | `src/core/works.ts` |
+| where you left off in each work | `src/core/progress.ts` |
+| the table of contents overlay | `src/ui/contents-panel.ts` |
 | the look-ahead ribbon | `src/render/guide.ts` |
 | keycaps, finger colours, press bloom, heatmap | `src/render/keyboard.ts` |
 | the hand schematics | `src/render/hands.ts` |
@@ -242,6 +246,76 @@ nothing about rendering.
   (`render/quality.ts`) caps the device pixel ratio at 2 in both modes, and that
   is measured — `lite` at 2x holds sixty frames a second at 2560x1440 on a CPU
   rasteriser. The three canvases used to hardcode 2.5 each.
+- **A stream can end, and two separate things have to notice.** `fill()`
+  (`engine.ts`) tops up with `while (text.length - cursor < BUFFER_AHEAD)`, so
+  `TextStream.next()` returns `null` for an ordered work and the loop breaks on
+  it — without that it spins for ever. Stopping `fill` is only half: `enterUnit`
+  empties `viable` and parks the cursor at the end of the text *without touching
+  the phase*, so a finished work would sit in `running` with every key dead and
+  the clock going. `advance()` completes the run, which is why `EndReason` has a
+  third value, `'end'`. Anything new that consumes a stream has to handle both.
+- **A bookmark is a chunk index, rounded down.** Stop half-way through a
+  paragraph and the next sitting starts at the top of it. A character offset is
+  not safe to resume from — it can land inside a unit, half-way through romaji
+  きゃ — and chunk boundaries are the only offsets a builder can promise are unit
+  boundaries. Re-typing a paragraph is the ritual, so the UI says which paragraph
+  it is resuming rather than hiding it. The place is written where a run ends, on
+  a chunk boundary at most every few seconds, and on `pagehide` — never per
+  keystroke. Note that the end-of-run write happens *twice* (the run, then
+  `pagehide`) with the stats still holding the run's characters, so a sitting is
+  counted once by a flag, not by the write.
+- **A work's body is fetched, so `source` cannot name one synchronously.**
+  `createStream` is called from the `Runner` constructor and from
+  `applySettings`, and the settings panel's handlers and `verify.mjs` all assume
+  it returns immediately. So `selectWork` in `main.ts` is the funnel: the body
+  lands first, and only then does `source` move. A stored work id starts on its
+  matching shuffle and swaps in when it arrives. `verify.mjs` must call
+  `__glide.selectWork`, never `applySettings`, or it silently gets the fallback.
+- **The works build must stay byte-deterministic.** `src/corpus/works/` is
+  committed and it is megabytes, so a rebuild that reorders a key or re-cuts a
+  chunk adds its whole size to the repository's history again, for ever. No
+  timestamps, no insertion-ordered iteration, chunk splitting a pure function of
+  the text. The test is `node scripts/build-shakyo.mjs --offline && git diff
+  --exit-code src/corpus/works`.
+- **Each 写経 work asserts its own chapter count**, in the spirit of the
+  death-year check. Gutenberg re-issues editions, and one that changed heading
+  style would otherwise ship a single giant chapter in silence. Six books are
+  listed in `build-shakyo.mjs` as deliberately absent with the reason. Adding one
+  means teaching the detector its shape and *then* pinning the count — never
+  relaxing the assertion until it passes.
+- **Japanese 写経 is blocked on the editions, and it is measured, not assumed.**
+  Of 358 cached 青空文庫 works over 2000 characters, **five** are fully
+  ruby-annotated. The all-kana corpus works because it cherry-picks the rare
+  fully-annotated *sentences*; a whole work is a far stronger requirement.
+  `build-shakyo-ja.mjs` is finished and correct and currently yields one usable
+  work, so none ship. Its `--needs` report shows the near misses are short of
+  kanji *numerals* rather than vocabulary, because editions leave those to
+  context — a narrower gap than it first looks, but the readings are genuinely
+  contextual (一 is いち / ひと / いっ), and `PATCHES` stays empty until someone
+  reads them in the 底本. Guessing one teaches wrong fingering.
+- **`scripts/lib/aozora.mjs` owns the author list, and nothing else may.** The
+  1945 death-year rule is a licensing constraint; a second Japanese builder with
+  its own copy of the list is how it gets lost. Same for
+  `scripts/lib/gutenberg.mjs` and the licence note that says these are texts
+  *sourced from* Project Gutenberg rather than Project Gutenberg eBooks.
+- **Ruby is read as a pairing, in one offset-tracking pass** (`scripts/lib/ruby.mjs`).
+  The old fold in `build-corpus-ja.mjs` is a chain of whole-document `.replace()`
+  calls, every one of which deletes characters — safe only because it throws the
+  kanji away. The moment you want an *index* into the result, running them in
+  sequence is wrong: each pass shifts every offset the previous one produced. So
+  the scanner works on one entry per output character, every transform is a
+  mark-and-filter over that array, and offsets are taken once at the end.
+- **Historical kana is modernised everywhere, including inside readings.** 731 of
+  the cached work files carry ゐ/ゑ/ヰ/ヱ inside an `<rt>`, and no kana layout has
+  a position for them (`kana-layouts.ts` has none; only romaji can). The typed
+  character is modernised and the original kept as a display override. Modernising
+  only body text leaves readings untypeable, which is the exact case the rule
+  exists for — `tests/ruby.test.ts` pins it.
+- **What the Japanese methods can type is settled by `buildUnits`, not by taste**
+  (`tests/shakyo-charset.test.ts`). Kana, ー、。・ are safe; the bracket and
+  exclamation punctuation of running prose is not. It matters because a character
+  no method can key is one `enterUnit` steps over and marks `Correct` — crediting
+  the typist for text they never typed.
 - **Adding a setting means adding a validation line** in `loadSettings`
   (`src/core/settings.ts`) — persisted values from an older build are merged over
   the defaults and must be range-checked or they silently break behaviour. This got
