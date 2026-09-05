@@ -64,7 +64,10 @@ const main = async () => {
     await page.evaluate((g) => window.__glide.applySettings({ graphics: g }), GRAPHICS);
     await wait(300);
   }
-  await page.evaluate(() => window.__glide.applySettings({ duration: 0 }));
+  // music: false is not cosmetic. The running sample comes after a Space, and a
+  // live mp3 decode plus a WebAudio graph on a machine with no GPU would make
+  // "take a reading, git stash, take another" a comparison of two workloads.
+  await page.evaluate(() => window.__glide.applySettings({ duration: 0, music: false }));
   await wait(200);
 
   const idle = await page.evaluate(`(${sampler})(2500)`);

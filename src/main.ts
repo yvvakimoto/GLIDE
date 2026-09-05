@@ -41,6 +41,8 @@ import { byId, setOpen } from './ui/dom';
 import { hudRefs, renderConfigChips, updateHud } from './ui/hud';
 import { renderContentsPanel, type WorkLoadState } from './ui/contents-panel';
 import { renderSettingsPanel } from './ui/settings-panel';
+import { armAudio, audioBus, resumeAudio } from './ui/audio';
+import { Music } from './ui/music';
 import { Clicker } from './ui/sound';
 import { renderSummary } from './ui/summary';
 import { TextView } from './ui/text-view';
@@ -95,6 +97,7 @@ if (storedWork) settings = { ...settings, source: fallbackFor(storedWork) };
 const runner = new Runner(settings);
 const refs = hudRefs();
 const clicker = new Clicker(settings.sound);
+const music = new Music(settings.music);
 
 const boardCanvas = byId<HTMLCanvasElement>('board-canvas');
 const speedCanvas = byId<HTMLCanvasElement>('speed-canvas');
@@ -183,6 +186,7 @@ function applySettings(patch: Partial<Settings>): void {
   settings = { ...settings, ...patch };
   saveSettings(settings);
   clicker.enabled = settings.sound;
+  music.setEnabled(settings.music);
   // Changing the layout or the Japanese method rebuilds the text too, on a
   // brand-new stream that starts at the top of the work — so the resume hangs
   // off the rebuild, not off `source` having moved.
@@ -537,7 +541,6 @@ window.addEventListener('keydown', (event) => {
 
   if (idle && event.code === 'Space' && !event.altKey) {
     event.preventDefault();
-    clicker.arm();
     runner.beginCountIn(now);
     return;
   }
@@ -557,15 +560,53 @@ window.addEventListener('keydown', (event) => {
   if (runner.handleKeydown(event, now)) event.preventDefault();
 });
 
+/**
+ * The blur abort is a measurement rule, not a lifecycle one: the clock keeps
+ * counting while the typist cannot type, and the wpm that comes out is a lie.
+ * The music measures nothing and deliberately does not follow it — blur fires
+ * every time you alt-tab with the tab still visible and audible, and cutting
+ * there would stutter it several times a minute. Actually leaving is
+ * `visibilitychange`'s job, below.
+ */
 window.addEventListener('blur', () => {
   if (runner.phase === 'running') runner.abort(performance.now());
 });
+
+/**
+ * Audio needs a gesture, and the music plays from the idle screen — so the
+ * unlock cannot hang off the start keypress the way the click's old arm() did:
+ * `s` for settings, or a click on a chip, is just as likely to be the first
+ * thing that happens. Capture phase, because the keydown handler above has half
+ * a dozen early returns and any of them would swallow it. It comes off on the
+ * *next* gesture rather than this one, because resume() is async and can be
+ * refused, and a handler that unhooked itself optimistically would leave the
+ * page silent for ever.
+ */
+const GESTURES = ['keydown', 'pointerdown', 'touchstart'] as const;
+
+function installAudioUnlock(): void {
+  const unlock = (): void => {
+    if (!settings.sound && !settings.music) return;
+    if (audioBus()?.ctx.state === 'running' && music.settled) {
+      for (const type of GESTURES) window.removeEventListener(type, unlock, true);
+      return;
+    }
+    armAudio();
+    resumeAudio();
+    if (settings.music) music.setEnabled(true);
+  };
+  for (const type of GESTURES) {
+    window.addEventListener(type, unlock, { capture: true, passive: true });
+  }
+}
 
 // Not `beforeunload`: it is unreliable under bfcache and on mobile, and these two
 // fire in the cases it was meant to cover.
 window.addEventListener('pagehide', () => saveMark('end'));
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') saveMark('end');
+  const hidden = document.visibilityState === 'hidden';
+  if (hidden) saveMark('end');
+  music.setVisible(!hidden);
 });
 
 const stripCtx = speedCanvas.getContext('2d');
@@ -729,6 +770,9 @@ function exposeDevHooks(): void {
       applySettings,
       /** switching to a work is async: verify must await this, not applySettings */
       selectWork,
+      audio: () => ({ ctx: audioBus()?.ctx.state ?? null, ...music.debug() }),
+      /** the real seam is 379 s in, so this is the only way it gets looked at */
+      loopNow: () => music.loopNow(),
       get mark() {
         return runner.mark;
       },
@@ -816,6 +860,7 @@ function noteInputRequirements(): void {
 document.documentElement.dataset.graphics = settings.graphics;
 checkCoverage();
 exposeDevHooks();
+installAudioUnlock();
 noteInputRequirements();
 renderConfigChips(refs, settings, openSettings);
 textView.sync(runner.text, runner.cursor);

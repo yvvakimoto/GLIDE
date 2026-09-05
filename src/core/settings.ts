@@ -38,6 +38,8 @@ export type Settings = {
   labelMode: LabelMode;
   fingerColors: boolean;
   sound: boolean;
+  /** the background loop; its own switch, because it is four megabytes and an opinion */
+  music: boolean;
   /**
    * `lite`, the default, is the app with no blur in it anywhere: no background
    * wash, no frosted overlays, no canvas shadow, and a lower device-pixel cap.
@@ -89,6 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fingerMarks: true,
   fingerColors: true,
   sound: true,
+  music: true,
   graphics: 'lite',
 };
 
@@ -111,6 +114,7 @@ const BOOLEANS = [
   'fingerMarks',
   'fingerColors',
   'sound',
+  'music',
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 function clamp(n: number, min: number, max: number): number {

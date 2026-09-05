@@ -53,6 +53,11 @@ async function main() {
   await page.evaluate(() => document.fonts.ready);
   await wait(400);
 
+  // The music defaults on, and every pass below would otherwise start a 4 MB
+  // fetch on its first keypress. Pinned off here and exercised on its own at the
+  // very end, where the settings this file bleeds between passes cannot reach.
+  await page.evaluate(() => window.__glide.applySettings({ music: false }));
+
   const shot = (name) => page.screenshot({ path: `${OUT}/${name}.png` });
 
   await shot('01-idle');
@@ -454,6 +459,85 @@ async function main() {
     if (stored.chars > stopped.chars) throw new Error(`a hidden tab moved the place: ${shakyo}`);
   }
 
+  // Music, dead last: every pass above bleeds its settings into the next one,
+  // and this is the pass that turns audio on.
+  //
+  // It has to be turned on by clicking the button, not by an applySettings from
+  // an evaluate. HTMLMediaElement.play() has an autoplay policy of its own and
+  // refuses outside a gesture — even here, where a hundred real keypresses have
+  // long since left the AudioContext running. So a context that is running is
+  // not proof the music can start, and this is the only pass in the file that
+  // has to go through the UI to mean anything.
+  // Settings are not the only thing the passes above bleed: the 写経 pass fakes
+  // a hidden tab and never puts it back, and the music deliberately pauses in
+  // one. Undo that first or nothing below can start.
+  const setVisibility = (state) =>
+    page.evaluate((value) => {
+      Object.defineProperty(document, 'visibilityState', { value, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+  await setVisibility('visible');
+
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('Escape'); // whatever the kana pass left running
+    await wait(700); // past SUMMARY_GUARD_MS, which kills the second Escape
+  }
+  await page.keyboard.press('s');
+  await wait(400);
+  const musicRow = page.locator('.setting').filter({ hasText: 'background music' });
+  if ((await musicRow.count()) !== 1) throw new Error('music: no settings row');
+  await musicRow.scrollIntoViewIfNeeded();
+  await wait(250);
+  // before the click, not after: picking a setting rebuilds the panel from
+  // scratch and that puts the scroller back to the top
+  await shot('26-music-setting');
+  await musicRow.locator('.seg button').first().click(); // [on, off]
+  await wait(400);
+  await page.keyboard.press('Escape');
+  await wait(2200);
+  const playing = await page.evaluate(() => window.__glide.audio());
+  const say = (what, state) => new Error('music: ' + what + ' ' + JSON.stringify(state));
+  if (playing.ctx !== 'running') throw say('the context is', playing);
+  if (playing.paused[playing.front]) throw say('the front deck never played', playing);
+  if (playing.ready < 3) throw say('never buffered', playing);
+  if (!(playing.at > 0.5)) throw say('the front deck did not advance', playing);
+
+  // A hidden tab pauses it outright — that is what keeps the loop scheduler out
+  // of a background tab — and coming back ramps it in rather than slapping.
+  await setVisibility('hidden');
+  await wait(400);
+  const away = await page.evaluate(() => window.__glide.audio());
+  if (away.paused.some((p) => !p)) throw say('a hidden tab did not pause it', away);
+  await setVisibility('visible');
+  await wait(1600);
+  const back = await page.evaluate(() => window.__glide.audio());
+  if (back.paused[back.front]) throw say('coming back did not resume it', back);
+  if (!(back.level > 0.1)) throw say('coming back did not ramp the level', back);
+
+  // The real seam is 379 seconds in, so jump to it. Reading the deck gains half
+  // a fade later is the only observation anywhere that proves the crossfade
+  // crossfades — and that it holds the level flat while it does.
+  if (!(await page.evaluate(() => window.__glide.loopNow()))) throw say('could not reach the seam', playing);
+  await wait(3000);
+  const seam = await page.evaluate(() => window.__glide.audio());
+  const power = seam.gains[0] * seam.gains[0] + seam.gains[1] * seam.gains[1];
+  if (!(seam.gains[0] > 0.01 && seam.gains[1] > 0.01)) throw say('the seam is a cut, not a fade', seam);
+  if (Math.abs(power - 1) > 0.05) throw say('the seam is not equal-power', { power, ...seam });
+
+  await wait(4000);
+  const looped = await page.evaluate(() => window.__glide.audio());
+  const parked = looped.front === 0 ? 1 : 0;
+  if (looped.front === playing.front) throw say('the decks never swapped', looped);
+  if (looped.paused[looped.front]) throw say('nothing is playing past the seam', looped);
+  // an idle deck is always paused at 0, or the next swap has to wait on a seek
+  if (!looped.paused[parked]) throw say('the outgoing deck was never parked', looped);
+
+  await page.evaluate(() => window.__glide.applySettings({ music: false }));
+  await wait(1800);
+  const silent = await page.evaluate(() => window.__glide.audio());
+  if (silent.paused.some((p) => !p)) throw say('still playing after off', silent);
+
+  console.log('music  :', JSON.stringify({ playing, power, seam: seam.gains, looped, silent }));
   console.log('advance:', JSON.stringify({ beforeMiss, afterMiss }));
   console.log('timer  :', JSON.stringify(expired));
   console.log('summary:', JSON.stringify({ insideGuard, afterGuard, afterEscape }));

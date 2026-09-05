@@ -103,6 +103,7 @@ The flow, and the file to look in:
 | the hand schematics | `src/render/hands.ts` |
 | canvas owner: sizing, flashes, ribbon animation | `src/render/board.ts` |
 | text panel, HUD, settings, summary | `src/ui/` |
+| the keypress click and the background loop | `src/ui/audio.ts`, `sound.ts`, `music.ts` |
 
 `src/main.ts` owns the frame loop and the global key handling; views read the
 runner's public state each frame and react to its callbacks. The runner knows
@@ -403,6 +404,58 @@ nothing about rendering.
   keycap labels. The authors' names in the picker are knowingly left out — they
   would add 15 subsets and 134 KB per weight. Canvas cannot read `--mono`, so the
   stack in `render/keyboard.ts` has to be kept in step with `app.css` by hand.
+- **Audio needs a gesture, and there is exactly one context.** Chrome caps a
+  document at six `AudioContext`s, so the click and the music share the one in
+  `ui/audio.ts`; a second `new AudioContext()` is how the click goes silent after
+  enough reloads. It is built lazily, so a visitor with both turned off never
+  causes one. The unlock is a capture-phase listener on `keydown` /
+  `pointerdown` / `touchstart` in `main.ts`, not the start keypress the click's
+  old `arm()` hung off: the music plays from the idle screen, and `s` for
+  settings or a click on a chip is just as likely to be the first thing that
+  happens. Capture, because the global `keydown` handler has half a dozen early
+  returns and any of them would swallow it. **A running context is not proof the
+  music can start**: `HTMLMediaElement.play()` has an autoplay policy of its own
+  and refuses outside a gesture even on a page whose context has been running for
+  minutes — so the listener unhooks on `music.settled`, on the *next* gesture,
+  never optimistically on this one. Every `play()` carries a `.catch()`: an
+  unhandled rejection is a `pageerror`, and `verify.mjs` exits non-zero on those.
+- **The loop is a crossfade, because the track does not fade.** `silencedetect`
+  finds no silence anywhere in it, and its last second sits at −18.4 dBFS against
+  −22.0 for its first five, so `<audio loop>` cuts audibly — and MP3's encoder
+  delay and tail padding would gap it even if it did fade. The textbook answer,
+  `decodeAudioData` with `loopStart`/`loopEnd`, is 384 s × 44.1 kHz × 2 ch × 4 B =
+  **135 MB** resident. So `ui/music.ts` ping-pongs two `<audio>` elements through
+  one context with an equal-power `cos`/`sin` pair on the `ctx` clock — equal
+  power and not linear because the tail and the head are uncorrelated, and a
+  linear pair digs a 3 dB hole in every seam. Scheduling rides `timeupdate`,
+  which fires about four times a second and keeps firing in a hidden tab, and not
+  `requestAnimationFrame`, which does not; because four a second is coarse the
+  swap is asked for `GUARD` seconds *before* it is needed, or the outgoing deck
+  runs out mid-fade. An idle deck is always paused at `currentTime` 0, so a swap
+  never waits on a seek. Both decks keep `loop = true` as the safety net: a
+  missed boundary is then one audible seam and never silence. Streaming is also
+  what keeps all of this off the main thread — decode and mixing are the
+  browser's audio thread, and `tick` compares two numbers. The real seam is 379
+  seconds in, which almost no session reaches, so it is pinned by
+  `__glide.loopNow()` in `verify.mjs`, which reads the two deck gains mid-fade
+  and checks they still sum in power to one.
+- **The music pass in `verify.mjs` has to go through the UI, and has to undo the
+  fake hidden tab.** It turns the music on by *clicking* the settings button,
+  because an `applySettings` from `page.evaluate` is not a gesture and `play()`
+  refuses — the graph builds, the file buffers, and nothing ever sounds. And the
+  写経 pass redefines `document.visibilityState` to `'hidden'` and never puts it
+  back; the music deliberately pauses in a hidden tab, so the pass restores it
+  first. Settings are not the only thing these passes bleed into each other.
+- **The music file is a committed binary, so it is encoded once.** Same rule as
+  the works build: 4.4 MB, and every re-encode adds another 4.4 MB to the
+  repository's history for ever. MP3 and not Ogg because Safari cannot play
+  Vorbis; 96 kbps stereo because the whole file is the price of the setting. The
+  master stays out of the repo — `.gitignore` names it — and the encode is
+  `ffmpeg -c:a libmp3lame -b:a 96k -write_xing 1` with metadata stripped;
+  `-write_xing` is load-bearing, because `el.duration` is what `loopAction`
+  schedules against. No `-af`: the level constant in `music.ts` is the volume
+  control, and normalising here would invalidate the −18.7 dBFS the constant was
+  derived from.
 
 ### Deployment
 
